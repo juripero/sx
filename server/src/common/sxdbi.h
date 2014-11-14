@@ -38,6 +38,12 @@ typedef struct {
     struct timeval tv_last;
 } sxi_db_t;
 
+typedef struct {
+    int64_t cache;
+    int64_t schema;
+    int64_t stmt;
+} sxi_db_stat_t;
+
 sxi_db_t* qnew(sqlite3 *handle);
 void qcheckpoint(sxi_db_t *db);
 void qcheckpoint_restart(sxi_db_t *db);
@@ -58,6 +64,7 @@ int qbegin(sxi_db_t *db);
 int qcommit(sxi_db_t *db);
 void qrollback(sxi_db_t *db);
 void qclose(sxi_db_t **db);
+void qstat(sxi_db_t *db, sxi_db_stat_t *stat);
 
 #define qnullify(Q) do { sqlite3_finalize(Q); Q = NULL; } while(0)
 

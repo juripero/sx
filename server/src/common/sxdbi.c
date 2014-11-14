@@ -134,6 +134,20 @@ void qcheckpoint_idle(sxi_db_t *db)
     }
 }
 
+void qstat(sxi_db_t *db, sxi_db_stat_t *sum)
+{
+    int cache, stmt, schema, high;
+    if (!db)
+        return;
+    if (sqlite3_db_status(db->handle, SQLITE_DBSTATUS_CACHE_USED, &cache, &high, 0) ||
+        sqlite3_db_status(db->handle, SQLITE_DBSTATUS_STMT_USED, &stmt, &high, 0) ||
+        sqlite3_db_status(db->handle, SQLITE_DBSTATUS_SCHEMA_USED, &schema, &high, 0))
+        return;
+    sum->cache += cache;
+    sum->stmt += stmt;
+    sum->schema += schema;
+}
+
 void qclose(sxi_db_t **db)
 {
     if (!db) {

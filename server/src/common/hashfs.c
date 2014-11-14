@@ -28,6 +28,8 @@
 #include "default.h"
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/time.h>
+#include <sys/resource.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -798,17 +800,53 @@ struct _sx_hashfs_t {
     struct rebalance_iter rit;
 };
 
+static void log_sqlite_stat(const char *msg, int op, double unit)
+{
+    int current, high;
+    if (sqlite3_status(op, &current, &high, 0) != SQLITE_OK)
+        return;
+    INFO("%19s: %3.3f MiB (high: %3.3f MiB)",
+         msg, current * unit / 1048576.0, high * unit / 1048576.0);
+}
+
+#ifdef __linux__
+#include <malloc.h>
+#endif
+
+static void log_meminfo(sx_hashfs_t *h, const char *msg)
+{
+    INFO("memory information %s", msg);
+#ifdef __linux__
+    struct rusage rusage;
+    if (getrusage(RUSAGE_SELF, &rusage)) {
+        PWARN("getrusage failed");
+        return;
+    }
+    struct mallinfo info = mallinfo();
+    INFO("RSS: %3.3f MiB, %3.3f MiB in use", rusage.ru_maxrss/1024.0, info.uordblks/1048576.0);
+#endif
+    log_sqlite_stat("sqlite3 malloc", SQLITE_STATUS_MEMORY_USED, 1);
+    log_sqlite_stat("sqlite3 page cache", SQLITE_STATUS_PAGECACHE_USED, 1024);
+}
+
 static void close_all_dbs(sx_hashfs_t *h) {
     unsigned int i, j;
+    sxi_db_stat_t stat;
 
+    memset(&stat, 0, sizeof(stat));
+    log_meminfo(h, "before finalize/close");
+
+    qstat(h->xferdb, &stat);
     sqlite3_finalize(h->qx_add);
     sqlite3_finalize(h->qx_hold);
     sqlite3_finalize(h->qx_isheld);
     sqlite3_finalize(h->qx_release);
     sqlite3_finalize(h->qx_hasheld);
     sqlite3_finalize(h->qx_wipehold);
+
     qclose(&h->xferdb);
 
+    qstat(h->eventdb, &stat);
     sqlite3_finalize(h->qe_getjob);
     sqlite3_finalize(h->qe_addjob);
     sqlite3_finalize(h->qe_addact);
@@ -822,6 +860,7 @@ static void close_all_dbs(sx_hashfs_t *h) {
 
     for(j=0; j<SIZES; j++) {
 	for(i=0; i<HASHDBS; i++) {
+            qstat(h->datadb[j][i], &stat);
 	    sqlite3_finalize(h->qb_get[j][i]);
 	    sqlite3_finalize(h->qb_nextavail[j][i]);
 	    sqlite3_finalize(h->qb_nextalloc[j][i]);
@@ -853,6 +892,7 @@ static void close_all_dbs(sx_hashfs_t *h) {
 	}
     }
     for(i=0; i<METADBS; i++) {
+        qstat(h->metadb[i], &stat);
 	sqlite3_finalize(h->qm_ins[i]);
 	sqlite3_finalize(h->qm_list[i]);
 	sqlite3_finalize(h->qm_listrevs[i]);
@@ -872,6 +912,8 @@ static void close_all_dbs(sx_hashfs_t *h) {
 	qclose(&h->metadb[i]);
     }
 
+    qstat(h->tempdb, &stat);
+    qstat(h->db, &stat);
     sqlite3_finalize(h->q_addvol);
     sqlite3_finalize(h->q_addvolmeta);
     sqlite3_finalize(h->q_addvolprivs);
@@ -923,6 +965,10 @@ static void close_all_dbs(sx_hashfs_t *h) {
     sqlite3_finalize(h->q_getval);
     qclose(&h->tempdb);
     qclose(&h->db);
+    INFO("DB pagecache used: %3.3f MiB", stat.cache / 1048576.0);
+    INFO("DB statement used: %3.3f MiB", stat.stmt / 1048576.0);
+    INFO("DB schema used   : %3.3f MiB", stat.schema / 1048576.0);
+    log_meminfo(h, "all DBs closed");
 }
 
 /* TODO: shouldn't use hidden variables */
