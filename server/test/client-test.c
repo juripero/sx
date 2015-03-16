@@ -2557,9 +2557,13 @@ int main(int argc, char **argv) {
             fprintf(stderr, "main: ERROR: Wrong number of arguments.\n");
             goto main_err;
         }
-        sx = sxc_init(SRC_VERSION, sxc_file_logger(&log, argv[0], "/dev/null", 0), test_input_fn, NULL);
+	if(sxc_lib_init(SRC_VERSION)) {
+            fprintf(stderr, "main: ERROR: Cannot initialize libsx\n");
+            goto main_err;
+        }
+        sx = sxc_init(sxc_file_logger(&log, argv[0], "/dev/null", 0), test_input_fn, NULL);
         if(!sx) {
-            fprintf(stderr, "main: ERROR: Cannot initiate SX.\n");
+            fprintf(stderr, "main: ERROR: Cannot initialize SX client\n");
             goto main_err;
         }
         if(args.config_dir_given && sxc_set_confdir(sx, args.config_dir_arg)) {
@@ -2634,6 +2638,7 @@ main_err:
     sxc_cluster_free(cluster);
     sxc_free_uri(uri);
     sxc_shutdown(sx, 0);
+    sxc_lib_shutdown(0);
     cmdline_parser_free(&args);
     return ret;
 } /* main */

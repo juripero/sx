@@ -67,14 +67,53 @@ static const char *guess_tempdir(void) {
     return ret;
 }
 
-sxc_client_t *sxc_init(const char *client_version, const sxc_logger_t *func, sxc_input_cb input_cb, void *input_ctx)
+int sxc_lib_init(const char *client_version)
 {
-    sxc_client_t *sx;
     struct sxi_logger l;
+    sxc_logger_t log;
+
+    memset(&l, 0, sizeof(l));
+    l.max_level = SX_LOG_DEBUG;
+    l.func = (*sxc_default_logger)(&log, "libsx init");
+
+    const char *this_version = sxc_get_version();
+    if (!client_version || strcmp(client_version, this_version)) {
+        sxi_log_msg(&l, "sxc_init", SX_LOG_CRIT, "Version mismatch: Our version '%s' - library version '%s'",
+                    client_version, this_version);
+        return -1;
+    }
+
+    /* FIXME THIS IS NOT THREAD SAFE */
+    signal(SIGPIPE, SIG_IGN);
+    if (sxi_crypto_check_ver(&l))
+        return -1;
+
+    CURLcode rc = curl_global_init(CURL_GLOBAL_ALL);
+    if (rc) {
+        sxi_log_msg(&l, "sxc_init", SX_LOG_CRIT, "Failed to initialize libcurl: %s",
+                    curl_easy_strerror(rc));
+	sxc_lib_shutdown(0);
+        return -1;
+    }
+
+    return 0;
+}
+
+void sxc_lib_shutdown(int signal) {
+    if(!signal) {
+	lt_dlexit();
+	curl_global_cleanup();
+        sxi_vcrypto_cleanup();
+    }
+}
+
+sxc_client_t *sxc_init(const sxc_logger_t *func, sxc_input_cb input_cb, void *input_ctx)
+{
+    struct sxi_logger l;
+    sxc_client_t *sx;
     unsigned int config_len;
     const char *home_dir;
     struct passwd *pwd;
-
 
     if (!func)
         return NULL;
@@ -82,23 +121,6 @@ sxc_client_t *sxc_init(const char *client_version, const sxc_logger_t *func, sxc
     l.max_level = SX_LOG_DEBUG;
     l.func = func;
 
-    const char *this_version = sxc_get_version();
-    if (!client_version || strcmp(client_version, this_version)) {
-        sxi_log_msg(&l, "sxc_init", SX_LOG_CRIT, "Version mismatch: Our version '%s' - library version '%s'",
-                    client_version, this_version);
-        return NULL;
-    }
-
-    /* FIXME THIS IS NOT THREAD SAFE */
-    signal(SIGPIPE, SIG_IGN);
-    if (sxi_crypto_check_ver(&l))
-        return NULL;
-    CURLcode rc = curl_global_init(CURL_GLOBAL_ALL);
-    if (rc) {
-        sxi_log_msg(&l, "sxc_init", SX_LOG_CRIT, "Failed to initialize libcurl: %s",
-                    curl_easy_strerror(rc));
-        return NULL;
-    }
     sx = calloc(1, sizeof(struct _sxc_client_t));
     if (!sx) {
         sxi_log_syserr(&l, "sxc_init", SX_LOG_CRIT, "Failed to allocate sx structure");
@@ -173,9 +195,6 @@ void sxc_shutdown(sxc_client_t *sx, int signal) {
 	sxi_filter_unloadall(sx);
 	free(sx->tempdir);
 	free(sx);
-	lt_dlexit();
-	curl_global_cleanup();
-        sxi_vcrypto_cleanup();
     }
 }
 

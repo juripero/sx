@@ -45,8 +45,10 @@
 static sxc_client_t *sx = NULL;
 
 static void sighandler(int signal) {
-    if(sx)
+    if(sx) {
 	sxc_shutdown(sx, signal);
+	sxc_lib_shutdown(0);
+    }
     fprintf(stderr, "Process interrupted\n");
     exit(1);
 }
@@ -322,7 +324,12 @@ int main(int argc, char **argv) {
     signal(SIGINT, sighandler);
     signal(SIGTERM, sighandler);
 
-    if(!(sx = sxc_init(SRC_VERSION, sxc_default_logger(&log, argv[0]), sxc_input_fn, NULL))) {
+    if(sxc_lib_init(SRC_VERSION)) {
+        fprintf(stderr, "ERROR: Failed to initialize libsx\n");
+	goto init_err;
+    }
+
+    if(!(sx = sxc_init(sxc_default_logger(&log, argv[0]), sxc_input_fn, NULL))) {
         fprintf(stderr, "ERROR: Failed to initialize SX\n");
 	goto init_err;
     }
@@ -533,6 +540,7 @@ int main(int argc, char **argv) {
     signal(SIGINT, SIG_IGN);
     signal(SIGTERM, SIG_IGN);
     sxc_shutdown(sx, 0);
+    sxc_lib_shutdown(0);
     cmdline_parser_free(&args);
     return ret;
 }

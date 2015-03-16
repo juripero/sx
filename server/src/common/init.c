@@ -34,9 +34,14 @@ sxc_client_t* sx_init(const sxc_logger_t *custom_logger, const char *application
 {
     sxc_client_t *sx;
     log_init(&custom_logger, application ? application : argv[0], logfile, log_foreground);
-    sx = sxc_init(src_version(), custom_logger, NULL, NULL);
+    if(sxc_lib_init(src_version())) {
+        CRIT("Cannot initialize libsx");
+        return NULL;
+    }
+    sx = sxc_init(custom_logger, NULL, NULL);
     if (!sx) {
         CRIT("Cannot initialize SX");
+	sxc_lib_shutdown(0);
         return NULL;
     }
     sxc_set_verbose(sx, 1);
@@ -50,6 +55,7 @@ sxc_client_t* sx_init(const sxc_logger_t *custom_logger, const char *application
 void sx_done(sxc_client_t **sx)
 {
     sxc_shutdown(*sx, 0);
+    sxc_lib_shutdown(0);
     *sx = NULL;
     log_done();
     sxprocdone();

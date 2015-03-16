@@ -100,7 +100,12 @@ int main(int argc, char **argv) {
 	snprintf(file, sizeof(file), "sxreport-client-%ld.log", (long)time(NULL));
 
     umask(077);
-    if(!(sx = sxc_init(SRC_VERSION, sxc_file_logger(&log, argv[0], file, 1), NULL, NULL))) {
+    if(sxc_lib_init(SRC_VERSION)) {
+	cmdline_parser_free(&args);
+	return 1;
+    }
+
+    if(!(sx = sxc_init(sxc_file_logger(&log, argv[0], file, 1), NULL, NULL))) {
 	cmdline_parser_free(&args);
 	return 1;
     }
@@ -126,5 +131,6 @@ int main(int argc, char **argv) {
     printf("You can attach it to a bugreport at %s\n", PACKAGE_BUGREPORT);
     cmdline_parser_free(&args);
     sxc_shutdown(sx, 0);
+    sxc_lib_shutdown(0);
     return 0;
 }

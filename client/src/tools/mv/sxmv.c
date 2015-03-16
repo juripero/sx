@@ -58,8 +58,10 @@ static sxc_client_t *sx = NULL;
 static void sighandler(int signal)
 {
     struct termios tcur;
-    if(sx)
+    if(sx) {
 	sxc_shutdown(sx, signal);
+	sxc_lib_shutdown(0);
+    }
 
     /* work around for ctrl+c during getpassword() in the aes filter */
     tcgetattr(0, &tcur);
@@ -150,7 +152,12 @@ int main(int argc, char **argv) {
     signal(SIGINT, sighandler);
     signal(SIGTERM, sighandler);
 
-    if(!(sx = sxc_init(SRC_VERSION, sxc_default_logger(&log, argv[0]), sxc_input_fn, NULL))) {
+    if(sxc_lib_init(SRC_VERSION)) {
+	cmdline_parser_free(&args);
+	return 1;
+    }
+
+    if(!(sx = sxc_init(sxc_default_logger(&log, argv[0]), sxc_input_fn, NULL))) {
 	cmdline_parser_free(&args);
 	return 1;
     }
@@ -176,6 +183,7 @@ int main(int argc, char **argv) {
 	fprintf(stderr, "ERROR: Failed to set filter dir\n");
 	cmdline_parser_free(&args);
         sxc_shutdown(sx, 0);
+	sxc_lib_shutdown(0);
 	return 1;
     }
     sxc_filter_loadall(sx, filter_dir);
@@ -234,6 +242,7 @@ int main(int argc, char **argv) {
     sxc_cluster_free(cluster1);
     sxc_cluster_free(cluster2);
     sxc_shutdown(sx, 0);
+    sxc_lib_shutdown(0);
     cmdline_parser_free(&args);
 
     return ret;

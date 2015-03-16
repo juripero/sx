@@ -57,8 +57,10 @@ static sxc_client_t *gsx = NULL;
 
 static void sighandler(int signal)
 {
-    if(gsx)
+    if(gsx) {
 	sxc_shutdown(gsx, signal);
+	sxc_lib_shutdown(0);
+    }
     fprintf(stderr, "Process interrupted\n");
     exit(1);
 }
@@ -344,11 +346,16 @@ int main(int argc, char **argv) {
     signal(SIGINT, sighandler);
     signal(SIGTERM, sighandler);
 
-    if(!(sx = gsx = sxc_init(SRC_VERSION, sxc_default_logger(&log, argv[0]), sxc_input_fn, NULL))) {
+    if(sxc_lib_init(SRC_VERSION)) {
         if(!strcmp(SRC_VERSION, sxc_get_version()))
             fprintf(stderr, "ERROR: Version mismatch: our version '%s' - library version '%s'\n", SRC_VERSION, sxc_get_version());
         else
             fprintf(stderr, "ERROR: Failed to init libsx\n");
+        return 1;
+    }
+
+    if(!(sx = gsx = sxc_init(sxc_default_logger(&log, argv[0]), sxc_input_fn, NULL))) {
+        fprintf(stderr, "ERROR: Failed to init SX client\n");
         return 1;
     }
 
@@ -655,5 +662,6 @@ int main(int argc, char **argv) {
     sxc_free_uri(uri);
     sxc_cluster_free(cluster);
     sxc_shutdown(sx, 0);
+    sxc_lib_shutdown(0);
     return ret;
 }
