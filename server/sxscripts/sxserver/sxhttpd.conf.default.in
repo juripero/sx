@@ -60,11 +60,11 @@ http {
                  fastcgi_max_temp_file_size 0;
                  include fastcgi_params;
              }
-             location /.s2s/.network {
+             location /.s2s/.traffic {
                  vhost_traffic_status_display;
                  vhost_traffic_status_display_format json;
-                 #deny all;
-                 #allow 127.0.0.1;
+                 allow 127.0.0.1;
+                 deny all;
              }
        }
 }

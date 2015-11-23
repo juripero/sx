@@ -746,7 +746,7 @@ int sxi_network_traffic_status(sxc_client_t *sx, sxi_conns_t *conns, const char 
     wctx.ctx = &yctx;
     sxi_cbdata_set_context(cbdata, &wctx);
     sxi_cbdata_allow_non_sx_responses(cbdata, 1);
-    if(sxi_cluster_query_ev(cbdata, conns, host, REQ_GET, "/.network", NULL, 0, traffic_wrap_setup_callback, traffic_wrap_data_callback)) {
+    if(sxi_cluster_query_ev(cbdata, conns, host, REQ_GET, "/.traffic", NULL, 0, traffic_wrap_setup_callback, traffic_wrap_data_callback)) {
         sxi_seterr(sx, SXE_EARG, "Out of memory adding host to hostlist (%s)", sxi_cbdata_geterrmsg(cbdata));
         goto network_traffic_status_err;
     }
