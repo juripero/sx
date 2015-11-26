@@ -566,7 +566,7 @@ clst_t *clst_query(sxi_conns_t *conns, sxi_hostlist_t *hlist) {
     }
 
     if(!yctx->replica_count) {
-	/* Legay server */
+	/* Legacy server */
 	switch(yctx->nsets) {
 	case 2:
 	    yctx->replica_count = MIN(sx_nodelist_count(yctx->one), sx_nodelist_count(yctx->two));
