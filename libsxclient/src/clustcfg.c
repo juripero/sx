@@ -3884,7 +3884,6 @@ char *sxc_fetch_sxauthd_credentials(sxc_client_t *sx, const char *username, cons
             }
             if(sxi_hostlist_add_host(sx, sxi_conns_get_hostlist(conns), this_host)) {
                 free(hlist);
-                fprintf(stderr, "ERROR: Cannot add %s to cluster nodes: %s\n", this_host, sxc_geterrmsg(sx));
                 goto sxc_fetch_sxauthd_credentials_err;
             }
             this_host = next_host;
