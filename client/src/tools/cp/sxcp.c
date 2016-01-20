@@ -507,7 +507,16 @@ static int progress_callback(const sxc_xfer_stat_t *xfer_stat) {
 
         case SXC_XFER_STATUS_FINISHED:
         case SXC_XFER_STATUS_FINISHED_ERROR: {
-            /* Do notnig */
+            double upload = xfer_stat->total_time - xfer_stat->put_initialize;
+            if (upload < 0) upload = 0.0;
+            if (args.verbose_flag)
+                fprintf(stderr,"Detailed timings: hash+initialize+upload+flush = %.1fs + %.1fs + %.1fs + %.1fs = %.1fs\n",
+                       xfer_stat->hash_compute,
+                       xfer_stat->put_initialize,
+                       upload,
+                       xfer_stat->flush,
+                       xfer_stat->hash_compute + xfer_stat->put_initialize + upload + xfer_stat->flush);
+            /* Do nothing */
         } break;
 
         case SXC_XFER_STATUS_PART_FINISHED:

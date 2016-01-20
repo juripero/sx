@@ -284,6 +284,13 @@ struct _sxc_xfer_stat {
 
     /* Context */
     void *ctx;
+
+    /* phases */
+    struct timeval hashes_computed;
+    struct timeval flush_started;
+    double hash_compute;
+    double put_initialize;
+    double flush;
 };
 
 typedef struct _sxc_xfer_stat sxc_xfer_stat_t;

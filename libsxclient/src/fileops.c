@@ -1397,6 +1397,10 @@ static void file_finish(struct file_upload_ctx *yctx)
         sxi_notice(sx, "WARNING: Source file has changed during upload");
 
     /*  TODO: multiplex flush_file */
+    sxc_xfer_stat_t *xfer_stat = sxi_conns_get_xfer_stat(sxi_cluster_get_conns(yctx->cluster));
+    if (xfer_stat) {
+        gettimeofday(&xfer_stat->flush_started, NULL);
+    }
     yctx->job = flush_file_ev(yctx->cluster, yctx->host, yctx->current.token, yctx->name, yctx->jobs);
     if (!yctx->job) {
         SXDEBUG("fail incremented due to !job");
@@ -1651,6 +1655,13 @@ static void multi_part_upload_blocks(curlev_context_t *ctx, const char *url)
     sxc_xfer_stat_t *xfer_stat = NULL;
     long status = 0;
 
+    xfer_stat = sxi_cluster_get_xfer_stat(yctx->cluster);
+    if (xfer_stat) {
+        struct timeval t;
+        gettimeofday(&t, NULL);
+        xfer_stat->put_initialize += sxi_timediff(&t, &xfer_stat->hashes_computed);
+    }
+
     if (sxi_cbdata_result(ctx, NULL, NULL, &status) == -1 || status != 200) {
         SXDEBUG("query failed: %ld", status);
         yctx->fail++;
@@ -1670,7 +1681,6 @@ static void multi_part_upload_blocks(curlev_context_t *ctx, const char *url)
     }
     SXDEBUG("need: %d hashes", yctx->current.needed_cnt);
 
-    xfer_stat = sxi_cluster_get_xfer_stat(yctx->cluster);
     if(xfer_stat) {
         int64_t to_skip = yctx->pos - yctx->last_pos - yctx->current.needed_cnt * (int64_t)yctx->blocksize;
         if(to_skip && skip_xfer(yctx->cluster, to_skip) != SXE_NOERROR) {
@@ -1802,6 +1812,12 @@ static int multi_part_compute_hash_ev(struct file_upload_ctx *yctx)
     yctx->current.ref++;
     /* TODO: multiple volhost support */
     sxi_cbdata_set_operation(yctx->cbdata, "upload file content hashes", NULL, NULL, NULL);
+
+    sxc_xfer_stat_t *xfer_stat = sxi_conns_get_xfer_stat(sxi_cluster_get_conns(yctx->cluster));
+    if (xfer_stat) {
+        gettimeofday(&xfer_stat->hashes_computed, NULL);
+        xfer_stat->hash_compute += sxi_timediff(&xfer_stat->hashes_computed, &xfer_stat->start_time);
+    }
 
     if(sxi_cluster_query_ev_retry(yctx->cbdata, sxi_cluster_get_conns(yctx->cluster), yctx->volhosts,
                                   yctx->query->verb, yctx->query->path, yctx->query->content, yctx->query->content_len,
@@ -6625,7 +6641,7 @@ static int sxc_copy_cb(sxc_file_list_t *target, sxc_file_t *pattern, sxi_hostlis
 
     /* Add obtained job reference to jobs array */
     if(job && sxi_jobs_add(target->jobs, job)) {
-        sxc_client_t *sx = target->sx;
+       sxc_client_t *sx = target->sx;
         SXDEBUG("Failed to add job to jobs table");
         sxi_job_free(job);
         return 1;
@@ -6648,7 +6664,18 @@ int sxc_copy(sxc_file_list_t *source, sxc_file_t *dest, int recursive, int onefs
     ctx.exclude = exclude;
     ctx.recursive = recursive;
     ctx.fail_same_file = fail_same_file;
-    return sxi_file_list_foreach(source, multi_cb, sxc_copy_cb, 1, 0, &ctx, exclude);
+    int ret = sxi_file_list_foreach(source, multi_cb, sxc_copy_cb, 1, 0, &ctx, exclude);
+
+    sxc_xfer_stat_t *xfer_stat = sxi_cluster_get_xfer_stat(dest->cluster);
+    if(xfer_stat && sxc_geterrnum(source->sx) != SXE_ABORT) {
+        xfer_stat->status = (ret ? SXC_XFER_STATUS_FINISHED_ERROR : SXC_XFER_STATUS_FINISHED);
+        if(xfer_stat->xfer_callback(xfer_stat) != SXE_NOERROR) {
+            sxi_seterr(source->sx, SXE_ABORT, "Transfer aborted");
+            ret = 1;
+        }
+    }
+
+    return ret;
 }
 
 // {"fileRevisions":{"rev#1":{"blockSize":1234,"fileSize":4567,"createdAt":12345}, "rev#2":{"blockSize":1234,"fileSize":4567,"createdAt":12345}}}
@@ -7120,6 +7147,13 @@ int sxc_copy_sxfile(sxc_file_t *source, sxc_file_t *dest, int fail_same_file) {
         if(!job) {
             SXDEBUG("Failed to copy files: NULL job");
             return -1;
+        }
+
+        sxc_xfer_stat_t *xfer_stat = sxi_conns_get_xfer_stat(sxi_cluster_get_conns(source->cluster));
+        if (xfer_stat) {
+            struct timeval t;
+            gettimeofday(&t, NULL);
+            xfer_stat->flush += sxi_timediff(&t, &xfer_stat->flush_started);
         }
 
         if(sxi_jobs_add(jobs, job)) {
