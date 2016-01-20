@@ -92,6 +92,7 @@ sxi_db_t *qnew(sqlite3 *handle)
         sqlite3_free(zVfsName);
     }
     sqlite3_wal_hook(handle, qwal_hook, db);
+    gettimeofday(&db->tv_last, NULL);
     return db;
 }
 
