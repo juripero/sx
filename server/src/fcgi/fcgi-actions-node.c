@@ -1707,6 +1707,7 @@ void fcgi_raft_request_vote(void) {
     sx_raft_state_t state;
     int len, success = 0, state_changed = 0;
     jparse_t *J;
+    unsigned int nnodes = sx_nodelist_count(sx_hashfs_effective_nodes(hashfs, NL_NEXTPREV));
 
     memset(&ctx, 0, sizeof(ctx));
     ctx.term = -1;
@@ -1771,6 +1772,11 @@ void fcgi_raft_request_vote(void) {
         goto request_vote_out;
     }
 
+    /* Request vote should not be sent */
+    if(nnodes < 3) {
+        INFO("Received Request Vote but distribution has less than 3 nodes");
+        goto request_vote_out;
+    }
 
     /* Check if current term is not obsolete */
     if(state.current_term.term < ctx.term || sx_hashfs_hdist_getversion(hashfs) < ctx.hdist_version || sx_hashfs_version_cmp(&ctx.remote_version, local_version) > 0) {

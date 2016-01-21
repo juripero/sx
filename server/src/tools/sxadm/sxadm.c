@@ -1531,7 +1531,7 @@ static int info_cluster(sxc_client_t *sx, struct cluster_args_info *args, enum i
 	}
     }
 
-    if(!is_rebalancing && sx_nodelist_count(nodes) >= 3) {
+    if(!is_rebalancing) {
 	/* There should be a leader */
 	if(!uuid_from_string(&leaderid, clst_leader_node(clst))) {
 	    const char *role = clst_raft_role(clst);

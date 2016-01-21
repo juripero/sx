@@ -211,11 +211,6 @@ static rc_ty raft_rpc_bcast(sx_hashfs_t *h, sx_raft_state_t *state, raft_rpc_typ
     if(!state || !me || !nodes || !max_recv_term || !max_recv_hdist_version || !max_recv_hashfs_version)
         return EINVAL;
 
-    if(nnodes < 3) {
-        WARN("Requested heartbeat in less than 3 nodes cluster");
-        return EINVAL;
-    }
-
     if(state->role == RAFT_ROLE_LEADER && (state->leader_state.hdist_version != sx_hashfs_hdist_getversion(h) || state->leader_state.nnodes != nnodes)) {
         WARN("Inconsistent raft state");
         return FAIL_EINTERNAL;
@@ -730,6 +725,66 @@ static rc_ty raft_election_start(sx_hashfs_t *h, sx_raft_state_t *state, const s
     return ret;
 }
 
+static rc_ty raft_become_leader(sx_hashfs_t *h, sx_raft_state_t *state, const sx_nodelist_t *nodes, unsigned int nnodes, uint64_t hb_keepalive) {
+    const sx_node_t *me = sx_hashfs_self(h);
+    rc_ty s;
+    unsigned int nnode;
+    struct timeval now;
+
+    if(!state || !me || !nodes) {
+        sx_hashfs_raft_state_abort(h);
+        return EINVAL;
+    }
+
+    if(state->role == RAFT_ROLE_LEADER) {
+        INFO("Requested becoming a leader, but the state already is RAFT_ROLE_LEADER");
+        sx_hashfs_raft_state_abort(h);
+        return OK;
+    }
+
+    state->role = RAFT_ROLE_LEADER;
+    state->voted = 0;
+    state->current_term.term++;
+    gettimeofday(&state->last_contact, NULL);
+
+    /* Randomize new ET */
+    state->election_timeout = sxi_rand() % 2 * hb_keepalive + 3 * hb_keepalive; /* inside [3*hb_keepalive,5*hb_keepalive) */
+
+    /* Prepare the node states array for a new leader (in case this node won) */
+    state->leader_state.node_states = calloc(nnodes, sizeof(sx_raft_node_state_t));
+    if(!state->leader_state.node_states) {
+        WARN("Failed to allocate node states for a new leader");
+        sx_hashfs_raft_state_abort(h);
+        return FAIL_EINTERNAL;
+    }
+    state->leader_state.nnodes = nnodes;
+    
+    gettimeofday(&now, NULL);
+    /* Initialize nodes uuids and next log index */
+    for(nnode = 0; nnode < nnodes; nnode++) {
+        const sx_node_t *node = sx_nodelist_get(nodes, nnode);
+        raft_node_state_init(&state->leader_state.node_states[nnode], sx_node_uuid(node), state->last_applied + 1, &now);
+    }
+
+    state->leader_state.hdist_version = sx_hashfs_hdist_getversion(h);
+    memcpy(&state->current_term.leader, sx_node_uuid(me), sizeof(sx_uuid_t));
+    state->current_term.has_leader = 1;
+
+    if((s = sx_hashfs_raft_state_set(h, state)) != OK) {
+        WARN("Failed to save new raft state: %s", msg_get_reason());
+        sx_hashfs_raft_state_abort(h);
+        sx_hashfs_raft_state_empty(h, state);
+        return s;
+    }
+    if(sx_hashfs_raft_state_end(h)) {
+        WARN("Failed to save raft state");
+        sx_hashfs_raft_state_empty(h, state);
+        return FAIL_EINTERNAL;
+    }
+
+    return OK;
+}
+
 static int raft_leader_reload_nodelist(sx_hashfs_t *h, sx_raft_state_t *state, const sx_nodelist_t *nodes, unsigned int nnodes) {
     sx_raft_node_state_t *nstates;
     unsigned int i, j;
@@ -793,11 +848,6 @@ static void raft_hbeat(sx_hashfs_t *h, int hdist_changed, int hb_keepalive_chang
     }
     nnodes = sx_nodelist_count(nodes);
 
-    if(nnodes < 3) {
-        DEBUG("Raft will not operate on less than 3 nodes cluster");
-        return;
-    }
-
     if(sx_hashfs_raft_state_begin(h)) {
         INFO("Failed to load raft state: Database is locked");
         return;
@@ -840,16 +890,26 @@ static void raft_hbeat(sx_hashfs_t *h, int hdist_changed, int hb_keepalive_chang
         } else
             sx_hashfs_raft_state_abort(h);
     } else if(sxi_timediff(&now, &state.last_contact) > state.election_timeout) {
-        int won_election = 0;
-        DEBUG("Election timeout elapsed, switching to CANDIDATE state");
-        /* Election timeout reached, start an election */
-        if(raft_election_start(h, &state, nodes, nnodes, hb_keepalive, &won_election)) {
-            WARN("Failed to start an election");
-            goto raft_hbeat_err;
-        }
+        if(nnodes < 3) {
+            DEBUG("Election timeout elapsed, switching to LEADER state");
+            if(raft_become_leader(h, &state, nodes, nnodes, hb_keepalive)) {
+                WARN("Failed to become a leader");
+                goto raft_hbeat_err;
+            }
+            /* At this stage Raft state has been reloaded and stored in database */
+        } else {
+            int won_election = 0;
 
-        if(won_election)
-           reload_state = 1;
+            DEBUG("Election timeout elapsed, switching to CANDIDATE state");
+            /* Election timeout reached, start an election */
+            if(raft_election_start(h, &state, nodes, nnodes, hb_keepalive, &won_election)) {
+                WARN("Failed to start an election");
+                goto raft_hbeat_err;
+            }
+
+            if(won_election)
+               reload_state = 1;
+        }
     } else {
         /* Database transaction is open, no changes are made */
         sx_hashfs_raft_state_abort(h);

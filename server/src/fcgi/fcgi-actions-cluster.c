@@ -398,7 +398,7 @@ void fcgi_handle_cluster_requests(void) {
             unsigned int i;
 
             CGI_PRINTF(",\"nodeStates\":{");
-            for(i = 0; i < state.leader_state.nnodes && sx_nodelist_count(sx_hashfs_effective_nodes(hashfs, NL_NEXTPREV)) >= 3; i++) {
+            for(i = 0; i < state.leader_state.nnodes; i++) {
                 double timediff = sxi_timediff(&now, &state.leader_state.node_states[i].last_contact);
                 if(i)
                     CGI_PUTC(',');

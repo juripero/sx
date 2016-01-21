@@ -4432,7 +4432,7 @@ static rc_ty hbeatdb_1_2_to_1_9(sxi_db_t *db)
         if(qprep(db, &q, "INSERT INTO hashfs (key,value) VALUES (:k, :v)"))
             break;
         memset(&state, 0, sizeof(state));
-        state.election_timeout = sxi_rand() % 40 + 60; /* inside [3*hb_keepalive,5*hb_keepalive) */
+        state.election_timeout = sxi_rand() % 1 + 10; /* inside [3*hb_keepalive,5*hb_keepalive) */
         if(qbind_text(q, ":k", "raftRole") || qbind_int(q, ":v", state.role) || qstep_noret(q))
             break;
         sqlite3_reset(q);
@@ -18277,7 +18277,7 @@ rc_ty sx_hashfs_raft_state_set(sx_hashfs_t *h, const sx_raft_state_t *state) {
             goto sx_hashfs_raft_state_set_err;
         sqlite3_reset(qdel);
     }
-
+INFO("STATE: %d", state->role);
     /* If this node is a leader, it should store nodelist with their statuses */
     if(state->role == RAFT_ROLE_LEADER) {
         unsigned int i;
