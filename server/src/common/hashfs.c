@@ -4253,6 +4253,24 @@ static rc_ty hashfs_2_0_to_2_1(sxi_db_t *db)
     return ret;
 }
 
+static rc_ty metadb_2_0_to_2_1(sxi_db_t *db)
+{
+    rc_ty ret = FAIL_EINTERNAL;
+    sqlite3_stmt *q = NULL;
+    do {
+        if(qprep(db, &q, "DROP INDEX IF EXISTS revision") || qstep_noret(q))
+            break;
+        qnullify(q);
+        if(qprep(db, &q, "CREATE INDEX IF NOT EXISTS files_etag ON files(volume_id,rev,age)") || qstep_noret(q))
+            break;
+        qnullify(q);
+
+        ret = OK;
+    } while(0);
+    qnullify(q);
+    return ret;
+}
+
 /* Version upgrade 1.9 -> 2.0 */
 static rc_ty hashfs_1_9_to_2_0(sxi_db_t *db)
 {
@@ -4780,6 +4798,7 @@ static const sx_upgrade_t upgrade_sequence[] = {
     {
         .from = HASHFS_VERSION_2_0,
         .to = HASHFS_VERSION_2_1,
+        .upgrade_metadb = metadb_2_0_to_2_1,
         .upgrade_hashfsdb = hashfs_2_0_to_2_1,
         .upgrade_xfersdb = xfer_2_0_to_2_1,
         .job = JOBTYPE_DUMMY
