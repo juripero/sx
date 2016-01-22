@@ -544,7 +544,15 @@ static rc_ty raft_leader_send_heartbeat(sx_hashfs_t *h, sx_raft_state_t *state, 
         return FAIL_EINTERNAL;
     }
 
-    if(save_state.current_term.term < max_recv_term.term || save_state.leader_state.hdist_version < max_recv_hdist_version || sx_hashfs_version_cmp(sx_hashfs_version(h), &max_recv_hashfs_version) < 0) {
+    if(save_state.leader_state.hdist_version < max_recv_hdist_version) {
+        if(!save_state.is_hdist_obsolete) {
+            WARN("This node has obsolete hdist version: %lld < %lld", (long long)sx_hashfs_hdist_getversion(h), (long long)max_recv_hdist_version);
+            save_state.is_hdist_obsolete = 1;
+            gettimeofday(&save_state.last_hdist_obsolete, NULL);
+        }
+        save_state.role = RAFT_ROLE_FOLLOWER;
+        state_changed = 1;
+    } else if(save_state.current_term.term < max_recv_term.term || sx_hashfs_version_cmp(sx_hashfs_version(h), &max_recv_hashfs_version) < 0) {
         DEBUG("Stale current term: %lld, max remote term: %lld", (long long)save_state.current_term.term, (long long)max_recv_term.term);
         save_state.role = RAFT_ROLE_FOLLOWER;
         memcpy(&save_state.current_term, &max_recv_term, sizeof(save_state.current_term));
@@ -684,7 +692,17 @@ static rc_ty raft_election_start(sx_hashfs_t *h, sx_raft_state_t *state, const s
         return s;
     }
 
-    if(state->current_term.term < max_recv_term.term || sx_hashfs_hdist_getversion(h) < max_recv_hdist_version || sx_hashfs_version_cmp(sx_hashfs_version(h), &max_recv_hashfs_version) < 0) {
+    if(sx_hashfs_hdist_getversion(h) < max_recv_hdist_version) {
+        if(!save_state.is_hdist_obsolete) {
+            WARN("This node has obsolete hdist version: %lld < %lld", (long long)sx_hashfs_hdist_getversion(h), (long long)max_recv_hdist_version);
+            save_state.is_hdist_obsolete = 1;
+            gettimeofday(&save_state.last_hdist_obsolete, NULL);
+        }
+        save_state.role = RAFT_ROLE_FOLLOWER;
+        memcpy(&save_state.current_term, &max_recv_term, sizeof(save_state.current_term));
+        save_state.voted = 0;
+        state_changed = 1;
+    } else if(state->current_term.term < max_recv_term.term || sx_hashfs_version_cmp(sx_hashfs_version(h), &max_recv_hashfs_version) < 0) {
         DEBUG("Stale current term: %lld, max remote term: %lld", (long long)state->current_term.term, (long long)max_recv_term.term);
         save_state.role = RAFT_ROLE_FOLLOWER;
         memcpy(&save_state.current_term, &max_recv_term, sizeof(save_state.current_term));

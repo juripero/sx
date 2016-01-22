@@ -642,6 +642,9 @@ typedef struct _raft_state_t {
     unsigned int election_timeout;
     /* The time, when last raft query received */
     struct timeval last_contact;
+    /* Stores the timestamp of last time when hdist was older than on other nodes */
+    struct timeval last_hdist_obsolete;
+    int is_hdist_obsolete;
 
     /* State properties specitic to current raft leader */
     struct raft_leader_state leader_state;
@@ -660,6 +663,8 @@ rc_ty sx_hashfs_raft_state_get(sx_hashfs_t *h, sx_raft_state_t *state);
 rc_ty sx_hashfs_raft_state_set(sx_hashfs_t *h, const sx_raft_state_t *state);
 /* Release memory taken by the raft state internals */
 void sx_hashfs_raft_state_empty(sx_hashfs_t *h, sx_raft_state_t *state);
+/* is_obsolete is set to 1 when node is not a part of hdist and the timeout is reached */
+rc_ty sx_hashfs_is_hdist_obsolete(sx_hashfs_t *h, int *is_obsolete);
 
 void sx_hashfs_warm_cache(sx_hashfs_t *h);
 int sx_hashfs_vacuum(sx_hashfs_t *h);

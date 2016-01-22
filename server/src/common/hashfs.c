@@ -101,6 +101,9 @@ const unsigned int bsz[SIZES] = {SX_BS_SMALL, SX_BS_MEDIUM, SX_BS_LARGE};
 #define SX_CLUSTER_SETTINGS_PREFIX "$clusterSettings$"
 #define SX_CLUSTER_SETTINGS_TYPE_LEN lenof("STRING")
 
+/* Timeout in seconds, after which a node which hdist is outdated will stop responding to requests. */
+/* TODO: Adjust that timeout */
+#define RAFT_HDIST_TIMEOUT 120
 /*#define DEBUG_REVISION_ID*/
 
 #define WARNHASH(MSG, X) do {				\
@@ -4272,6 +4275,7 @@ static rc_ty hashfs_2_0_to_2_1(sxi_db_t *db)
 {
     rc_ty ret = FAIL_EINTERNAL;
     sqlite3_stmt *q = NULL;
+    sx_blob_t *b = NULL;
     do {
         if(qprep(db, &q, "CREATE TABLE umeta (user_id INTEGER NOT NULL REFERENCES users(uid) ON DELETE CASCADE ON UPDATE CASCADE, key TEXT ("STRIFY(SXLIMIT_META_MAX_KEY_LEN)") NOT NULL, value BLOB ("STRIFY(SXLIMIT_META_MAX_VALUE_LEN)") NOT NULL, PRIMARY KEY(user_id, key))") || qstep_noret(q))
             break;
@@ -4279,6 +4283,7 @@ static rc_ty hashfs_2_0_to_2_1(sxi_db_t *db)
         ret = OK;
     } while(0);
     qnullify(q);
+    sx_blob_free(b);
     return ret;
 }
 
@@ -18131,6 +18136,21 @@ rc_ty sx_hashfs_raft_state_get(sx_hashfs_t *h, sx_raft_state_t *state) {
         goto sx_hashfs_raft_state_get_err;
     sqlite3_reset(q);
 
+    /* Last time when hdist was older than on some other node */
+    if(qbind_text(q, ":k", "raftLastHdistObsoleteSec"))
+        goto sx_hashfs_raft_state_get_err;
+    r = qstep(q);
+    if(r == SQLITE_ROW) {
+        state->last_hdist_obsolete.tv_sec = sqlite3_column_int64(q, 0);
+        sqlite3_reset(q);
+        if(qbind_text(q, ":k", "raftLastHdistObsoleteUsec") || qstep_ret(q))
+            goto sx_hashfs_raft_state_get_err;
+        state->last_hdist_obsolete.tv_usec = sqlite3_column_int64(q, 0);
+        state->is_hdist_obsolete = 1;
+    } else if(r != SQLITE_DONE)
+        goto sx_hashfs_raft_state_get_err;
+    sqlite3_reset(q);
+
     /* If this node is a leader, it should store nodelist with their statuses */
     if(state->role == RAFT_ROLE_LEADER) {
         unsigned int i;
@@ -18277,7 +18297,24 @@ rc_ty sx_hashfs_raft_state_set(sx_hashfs_t *h, const sx_raft_state_t *state) {
             goto sx_hashfs_raft_state_set_err;
         sqlite3_reset(qdel);
     }
-INFO("STATE: %d", state->role);
+
+    /* Last time when hdist was older than on some other node */
+    if(state->is_hdist_obsolete) {
+        if(qbind_text(qset, ":k", "raftLastHdistObsoleteSec") || qbind_int64(qset, ":v", state->last_hdist_obsolete.tv_sec) || qstep_noret(qset))
+            goto sx_hashfs_raft_state_set_err;
+        sqlite3_reset(qset);
+        if(qbind_text(qset, ":k", "raftLastHdistObsoleteUsec") || qbind_int64(qset, ":v", state->last_hdist_obsolete.tv_usec) || qstep_noret(qset))
+            goto sx_hashfs_raft_state_set_err;
+        sqlite3_reset(qset);
+    } else {
+        if(qbind_text(qdel, ":k", "raftLastHdistObsoleteSec") || qstep_noret(qdel))
+            goto sx_hashfs_raft_state_set_err;
+        sqlite3_reset(qdel);
+        if(qbind_text(qdel, ":k", "raftLastHdistObsoleteUsec") || qstep_noret(qdel))
+            goto sx_hashfs_raft_state_set_err;
+        sqlite3_reset(qdel);
+    }
+
     /* If this node is a leader, it should store nodelist with their statuses */
     if(state->role == RAFT_ROLE_LEADER) {
         unsigned int i;
@@ -18356,6 +18393,46 @@ static rc_ty update_raft_timeout(sx_hashfs_t *h) {
 
     sx_hashfs_raft_state_empty(h, &state);
     return OK;
+}
+
+rc_ty sx_hashfs_is_hdist_obsolete(sx_hashfs_t *h, int *is_obsolete) {
+    struct timeval t, now;
+    int r;
+    rc_ty ret = FAIL_EINTERNAL;
+    sqlite3_stmt *q;
+
+    if(!h || !is_obsolete) {
+        NULLARG();
+        return EINVAL;
+    }
+    q = h->qh_getval;
+    *is_obsolete = 0;
+
+    if(qbegin(h->hbeatdb)) {
+        WARN("Database is locked");
+        return ret;
+    }
+
+    if(qbind_text(q, ":k", "raftLastHdistObsoleteSec"))
+        goto sx_hashfs_is_hdist_obsolete_err;
+    r = qstep(q);
+    if(r == SQLITE_ROW) {
+        t.tv_sec = sqlite3_column_int64(q, 0);
+        sqlite3_reset(q);
+        if(qbind_text(q, ":k", "raftLastHdistObsoleteUsec") || qstep_ret(q))
+            goto sx_hashfs_is_hdist_obsolete_err;
+        t.tv_usec = sqlite3_column_int64(q, 0);
+        gettimeofday(&now, NULL);
+        if(sxi_timediff(&now, &t) > RAFT_HDIST_TIMEOUT)
+            *is_obsolete = 1;
+    } else if(r != SQLITE_DONE)
+        goto sx_hashfs_is_hdist_obsolete_err;
+
+    ret = OK;
+sx_hashfs_is_hdist_obsolete_err:
+    sqlite3_reset(q);
+    qrollback(h->hbeatdb);
+    return ret;
 }
 
 void sx_hashfs_raft_state_empty(sx_hashfs_t *h, sx_raft_state_t *state) {
