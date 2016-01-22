@@ -485,8 +485,7 @@ void sxi_cbdata_setsyserr(curlev_context_t *ctx, enum sxc_error_t err, const cha
     sxi_cbdata_seterr(ctx, err, "%s", f.buf);
 }
 
-void sxi_cbdata_setclusterr(curlev_context_t *ctx, const char *nodeid, const char *reqid, int status,
-                     const char *msg, const char *details)
+void sxi_cbdata_setclusterr(curlev_context_t *ctx, const char *host, int status, const char *msg, const char *details)
 {
     char httpcode[16];
     struct sxi_fmt f;
@@ -512,12 +511,8 @@ void sxi_cbdata_setclusterr(curlev_context_t *ctx, const char *nodeid, const cha
         }
     }
     if(status == 500 || status == 503) {
-        sxi_fmt_msg(&f," (on");
-        if (nodeid)
-            sxi_fmt_msg(&f, " node:%s", nodeid);
-        if (reqid)
-            sxi_fmt_msg(&f, " reqid:%s", reqid);
-        sxi_fmt_msg(&f, ")");
+        if (host)
+            sxi_fmt_msg(&f, " (on node: %s)", host);
         if (sxc_is_verbose(sx) && details && *details)
             sxi_fmt_msg(&f, "\nHTTP %d: %s", status, details);
     }
@@ -584,7 +579,7 @@ int sxi_cbdata_wait(curlev_context_t *ctx, curl_events_t *e, long *http_status)
     return -2;
 }
 
-static void sxi_cbdata_finish(curl_events_t *e, curlev_context_t **ctxptr, const char *url, error_cb_t err)
+static void sxi_cbdata_finish(curl_events_t *e, curlev_context_t **ctxptr, const char *host, const char *url, error_cb_t err)
 {
     struct recv_context *rctx;
     curlev_context_t *ctx;
@@ -618,12 +613,13 @@ static void sxi_cbdata_finish(curl_events_t *e, curlev_context_t **ctxptr, const
     } else if (rctx->reply_status > 0 && rctx->reason && rctx->reasonsz > 0) {
         rctx->reason[rctx->reasonsz] = '\0';
         if (err)
-            err(ctx, rctx->reply_status, rctx->reason);
+            err(ctx, host, rctx->reply_status, rctx->reason);
     }
 
     do {
     if (ctx->retry.cb && (rctx->rc != CURLE_OK || rctx->reply_status / 100 != 2) && rctx->reply_status != 413) {
         int n = sxi_hostlist_get_count(&ctx->retry.hosts);
+        const char *next_host;
         if (++ctx->retry.hostidx >= n) {
             if (ctx->retry.retries < 2 || ctx->recv_ctx.reply_status == 429) {
                 ctx->retry.retries++;
@@ -636,14 +632,14 @@ static void sxi_cbdata_finish(curl_events_t *e, curlev_context_t **ctxptr, const
                 sxi_retry_throttle(sx, ctx->retry.retries);
             }
         }
-        const char *host = sxi_hostlist_get_host(&ctx->retry.hosts, ctx->retry.hostidx);
+        next_host = sxi_hostlist_get_host(&ctx->retry.hosts, ctx->retry.hostidx);
         if (sxi_retry_check(ctx->retry.retry, ctx->retry.retries * n + ctx->retry.hostidx))
             break;
         sxi_cbdata_set_operation(ctx, ctx->retry.op, NULL, NULL, NULL);
-        sxi_retry_msg(sx, ctx->retry.retry, host);
+        sxi_retry_msg(sx, ctx->retry.retry, next_host);
         sxi_cbdata_reset(ctx);
-        if (host) {
-            if (!ctx->retry.cb(ctx, ctx->conns, host,
+        if (next_host) {
+            if (!ctx->retry.cb(ctx, ctx->conns, next_host,
                                ctx->retry.verb, ctx->retry.query, ctx->retry.content, ctx->retry.content_size,
                                ctx->retry.setup_callback,
                                ctx->data_cb)) {
@@ -2682,7 +2678,7 @@ static int ev_add(curl_events_t *e,
         return 0;
     } while(0);
     EVENTSDEBUG(e, "ev_add failed");
-    sxi_cbdata_finish(e, &ctx, headers->url, reply->headers.error);
+    sxi_cbdata_finish(e, &ctx, headers->host, headers->url, reply->headers.error);
     if (ev) {
         if (ev->slist) {
             curl_slist_free_all(ev->slist);
@@ -2946,7 +2942,7 @@ int sxi_curlev_poll_immediate(curl_events_t *e)
 
                 urldup = strdup(url);
                 queue_next_inactive(e);
-                sxi_cbdata_finish(e, &ctx, urldup, ev->error);
+                sxi_cbdata_finish(e, &ctx, ev->host, urldup, ev->error);
                 free(urldup);
             } else {
                 EVENTSDEBUG(e,"WARNING: failed to find curl handle\n");
@@ -3411,7 +3407,7 @@ static void cb_sxauthd_errnode(jparse_t *J, void *ctx, const char *string, unsig
     sxi_strlcpy(c->node, string, MIN(sizeof(c->node), length + 1));
 }
 
-static void sxauthd_errfn(curlev_context_t *ctx, int reply_code, const char *reason) {
+static void sxauthd_errfn(curlev_context_t *ctx, const char *host, int reply_code, const char *reason) {
     const struct jparse_actions acts = {
 	JPACTS_STRING(
 		      JPACT(cb_sxauthd_errmsg, JPKEY("ErrorMessage")),
@@ -3434,7 +3430,7 @@ static void sxauthd_errfn(curlev_context_t *ctx, int reply_code, const char *rea
     else if(strcmp("SXAUTHD", yctx.node))
 	sxi_cbdata_seterr(ctx, SXE_ECOMM, "This is not an sxauthd host");
     else if(yctx.message[0])
-	sxi_cbdata_setclusterr(ctx, NULL, NULL, reply_code, yctx.message, NULL);
+	sxi_cbdata_setclusterr(ctx, NULL, reply_code, yctx.message, NULL);
     else
 	sxi_cbdata_seterr(ctx, SXE_ECOMM, "Cluster query failed: No reason provided");
 
@@ -3588,7 +3584,7 @@ sxi_curlev_fetch_sxauthd_credentials_err:
     free(unique_enc);
     free(data);
     free(ev);
-    sxi_cbdata_finish(e, &cbdata, url, sxauthd_errfn);
+    sxi_cbdata_finish(e, &cbdata, NULL, url, sxauthd_errfn);
     return ret;
 }
 

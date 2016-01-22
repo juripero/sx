@@ -244,7 +244,7 @@ static void cb_errfn(jparse_t *J, void *ctx, const char *string, unsigned int le
     sxi_strlcpy(ctx, string, MIN(ERRFNBUFLEN, length+1));
 }
 
-static void errfn(curlev_context_t *ctx, int reply_code, const char *reason) {
+static void errfn(curlev_context_t *ctx, const char *host, int reply_code, const char *reason) {
     const struct jparse_actions acts = {
 	JPACTS_STRING(JPACT(cb_errfn, JPKEY("ErrorMessage")))
     };
@@ -261,7 +261,7 @@ static void errfn(curlev_context_t *ctx, int reply_code, const char *reason) {
     if(sxi_jparse_digest(J, reason, strlen(reason)) || sxi_jparse_done(J))
 	sxi_cbdata_seterr(ctx, SXE_ECOMM, sxi_jparse_geterr(J));
     else if(*errbuf)
-	sxi_cbdata_setclusterr(ctx, NULL, NULL, reply_code, errbuf, NULL);
+	sxi_cbdata_setclusterr(ctx, host, reply_code, errbuf, NULL);
     else
 	sxi_cbdata_seterr(ctx, SXE_ECOMM, "Cluster query failed: No reason provided");
 
