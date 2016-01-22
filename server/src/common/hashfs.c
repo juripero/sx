@@ -71,14 +71,18 @@
 #define HASHFS_VERSION_1_1 MAKE_HASHFS_LEGACY_VER(1,7)
 #define HASHFS_VERSION_1_2 MAKE_HASHFS_LEGACY_VER(1,8)
 
-/* Current versioning */
-#define MAKE_HASHFS_VER(major, minor) "SXST "STRIFY(major)"."STRIFY(minor)
-#define HASHFS_VERSION_1_9 MAKE_HASHFS_VER(1,9)
-#define HASHFS_VERSION_2_0 MAKE_HASHFS_VER(2,0)
-#define HASHFS_VERSION_2_1 MAKE_HASHFS_VER(2,1)
+/* 2.0 versioning */
+#define MAKE_HASHFS_VER_OLD(major, minor) "SXST "STRIFY(major)"."STRIFY(minor)
+#define HASHFS_VERSION_1_9 MAKE_HASHFS_VER_OLD(1,9)
+#define HASHFS_VERSION_2_0 MAKE_HASHFS_VER_OLD(2,0)
+
+#define MAKE_HASHFS_VER(major, minor, micro) "SXSTO "STRIFY(major)"."STRIFY(minor)"."STRIFY(micro)
+#define HASHFS_VERSION_2_0_1 MAKE_HASHFS_VER(2,0,1)
 
 #define HASHFS_VERSION_INITIAL HASHFS_VERSION_1_0
-#define HASHFS_VERSION_CURRENT MAKE_HASHFS_VER(SRC_MAJOR_VERSION, SRC_MINOR_VERSION)
+
+#define HASHFS_MICRO_VERSION 1
+#define HASHFS_VERSION_CURRENT MAKE_HASHFS_VER(SRC_MAJOR_VERSION, SRC_MINOR_VERSION, HASHFS_MICRO_VERSION)
 
 #define SIZES 3
 const char sizedirs[SIZES] = "sml";
@@ -4217,8 +4221,8 @@ static rc_ty upgrade_db(int lockfd, const char *path, sxi_db_t *db, const sx_has
     return ret;
 }
 
-/* Version upgrade 2.0 -> 2.1 */
-static rc_ty xfer_2_0_to_2_1(sxi_db_t *db) {
+/* Version upgrade 2.0 -> 2.0.1 */
+static rc_ty xfer_2_0_to_2_0_1(sxi_db_t *db) {
     rc_ty ret = FAIL_EINTERNAL;
     sqlite3_stmt *q = NULL;
 
@@ -4239,7 +4243,7 @@ static rc_ty xfer_2_0_to_2_1(sxi_db_t *db) {
     return ret;
 }
 
-static rc_ty hashfs_2_0_to_2_1(sxi_db_t *db)
+static rc_ty hashfs_2_0_to_2_0_1(sxi_db_t *db)
 {
     rc_ty ret = FAIL_EINTERNAL;
     sqlite3_stmt *q = NULL;
@@ -4253,7 +4257,7 @@ static rc_ty hashfs_2_0_to_2_1(sxi_db_t *db)
     return ret;
 }
 
-static rc_ty metadb_2_0_to_2_1(sxi_db_t *db)
+static rc_ty metadb_2_0_to_2_0_1(sxi_db_t *db)
 {
     rc_ty ret = FAIL_EINTERNAL;
     sqlite3_stmt *q = NULL;
@@ -4797,10 +4801,10 @@ static const sx_upgrade_t upgrade_sequence[] = {
     },
     {
         .from = HASHFS_VERSION_2_0,
-        .to = HASHFS_VERSION_2_1,
-        .upgrade_metadb = metadb_2_0_to_2_1,
-        .upgrade_hashfsdb = hashfs_2_0_to_2_1,
-        .upgrade_xfersdb = xfer_2_0_to_2_1,
+        .to = HASHFS_VERSION_2_0_1,
+        .upgrade_metadb = metadb_2_0_to_2_0_1,
+        .upgrade_hashfsdb = hashfs_2_0_to_2_0_1,
+        .upgrade_xfersdb = xfer_2_0_to_2_0_1,
         .job = JOBTYPE_DUMMY
     }
 };
