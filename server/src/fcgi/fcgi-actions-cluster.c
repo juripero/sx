@@ -100,6 +100,11 @@ void fcgi_handle_cluster_requests(void) {
 	    }
 	}
     }
+int is_obsolete = 0;
+if(sx_hashfs_is_hdist_obsolete(hashfs, &is_obsolete)) {
+    quit_errmsg(500, "Failed to check hdist freshness");
+} else if(is_obsolete)
+    quit_errmsg(500, "This node is no longer part of the cluster");
 
     CGI_PUTS("Content-type: application/json\r\n\r\n{");
 
