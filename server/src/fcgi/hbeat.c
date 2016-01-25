@@ -977,6 +977,7 @@ int hbeatmgr(sxc_client_t *sx, const char *dir, int pipe) {
     while(!terminate) {
 	int dc;
         uint64_t prev_hb_keepalive = hb_keepalive;
+        int is_hdist_obsolete = 0;
 
         if(sx_hashfs_cluster_settings_get_uint64(hashfs, "hb_keepalive", &hb_keepalive)) {
             WARN("Failed to get hb_keepalive setting, defaulting to %llds", HB_KEEPALIVE_DEFAULT);
@@ -1000,6 +1001,8 @@ int hbeatmgr(sxc_client_t *sx, const char *dir, int pipe) {
         if(wait_trigger(pipe, (float)hb_keepalive, NULL))
             break;
 
+        DEBUG("Beat!");
+
 	dc = sx_hashfs_distcheck(hashfs);
 	if(dc < 0) {
 	    CRIT("Failed to reload distribution");
@@ -1007,7 +1010,14 @@ int hbeatmgr(sxc_client_t *sx, const char *dir, int pipe) {
 	} else if(dc > 0)
 	    INFO("Distribution reloaded");
 
-	DEBUG("Beat!");
+        if(sx_hashfs_is_hdist_obsolete(hashfs, &is_hdist_obsolete))
+            WARN("Failed to check if hdist is obsolete");
+        if(is_hdist_obsolete) {
+            DEBUG("Hdist version is obsolete, this node is no longer part of the cluster");
+            /* This node will no longer take part in Raft election, but keep the hbeat worker working */
+            continue;
+        }
+
         if(!sx_storage_is_bare(hashfs) && !sx_hashfs_is_rebalancing(hashfs) && !sx_hashfs_is_orphan(hashfs)) {
 	    raft_hbeat(hashfs, dc > 0, prev_hb_keepalive != hb_keepalive, hb_keepalive, hb_deadtime);
 	    sx_hashfs_checkpoint_hbeatdb(hashfs);
