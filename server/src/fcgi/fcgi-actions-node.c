@@ -1707,7 +1707,8 @@ void fcgi_raft_request_vote(void) {
     sx_raft_state_t state;
     int len, success = 0, state_changed = 0;
     jparse_t *J;
-    unsigned int nnodes = sx_nodelist_count(sx_hashfs_effective_nodes(hashfs, NL_NEXTPREV));
+    const sx_nodelist_t *nodes = sx_hashfs_effective_nodes(hashfs, NL_NEXT);
+    unsigned int nnodes = sx_nodelist_count(nodes);
 
     memset(&ctx, 0, sizeof(ctx));
     ctx.term = -1;
@@ -1715,6 +1716,9 @@ void fcgi_raft_request_vote(void) {
     ctx.last_log_index = -1;
     ctx.last_log_term = -1;
     local_version = sx_hashfs_version(hashfs);
+
+    if(!nodes)
+        quit_errmsg(500, "Failed to obtain nodelist");
 
     J = sxi_jparse_create(&acts, &ctx, 0);
     if(!J)
@@ -1748,6 +1752,11 @@ void fcgi_raft_request_vote(void) {
     if(sx_hashfs_raft_state_get(hashfs, &state)) {
         sx_hashfs_raft_state_abort(hashfs);
         quit_errmsg(500, "Failed to obtain current raft state");
+    }
+
+    if(!sx_nodelist_lookup(nodes, sx_node_uuid(sx_hashfs_self(hashfs)))) {
+        DEBUG("This node is not a part of the distribution");
+        goto request_vote_out;
     }
 
     if(sx_hashfs_is_node_ignored(hashfs, &ctx.candidate_uuid)) {
@@ -2024,6 +2033,10 @@ void fcgi_raft_append_entries(void) {
     int success = 0;
     int state_changed = 0;
     jparse_t *J;
+    const sx_nodelist_t *nodes = sx_hashfs_effective_nodes(hashfs, NL_NEXT);
+
+    if(!nodes)
+        quit_errmsg(500, "Failed to obtain nodelist");
 
     memset(&ctx, 0, sizeof(ctx));
     ctx.term = -1;
@@ -2073,6 +2086,11 @@ void fcgi_raft_append_entries(void) {
         quit_errmsg(500, "Failed to obtain current raft state");
     }
     
+    if(!sx_nodelist_lookup(nodes, sx_node_uuid(sx_hashfs_self(hashfs)))) {
+        DEBUG("This node is not a part of the distribution");
+        goto append_entries_out;
+    }
+
     if(sx_hashfs_is_node_ignored(hashfs, &ctx.leader_uuid)) {
         DEBUG("Node %s is ignored, but is sending AppendEntries requests", ctx.leader_uuid.string);
         goto append_entries_out;

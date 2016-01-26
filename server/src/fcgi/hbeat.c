@@ -550,6 +550,9 @@ static rc_ty raft_leader_send_heartbeat(sx_hashfs_t *h, sx_raft_state_t *state, 
         memcpy(&save_state.current_term, &max_recv_term, sizeof(save_state.current_term));
         save_state.voted = 0;
         state_changed = 1;
+    } else if(save_state.is_hdist_obsolete) {
+        save_state.is_hdist_obsolete = 0;
+        state_changed = 1;
     }
 
     if(save_state.role == RAFT_ROLE_LEADER) {
@@ -841,7 +844,7 @@ static void raft_hbeat(sx_hashfs_t *h, int hdist_changed, int hb_keepalive_chang
     int reload_state = 0;
 
     /* Prepare node list */
-    nodes = sx_hashfs_effective_nodes(h, NL_NEXTPREV);
+    nodes = sx_hashfs_effective_nodes(h, NL_NEXT);
     if(!nodes) {
         INFO("Failed to obtain cluster nodelist");
         return;
@@ -1018,7 +1021,7 @@ int hbeatmgr(sxc_client_t *sx, const char *dir, int pipe) {
             continue;
         }
 
-        if(!sx_storage_is_bare(hashfs) && !sx_hashfs_is_rebalancing(hashfs) && !sx_hashfs_is_orphan(hashfs)) {
+        if(!sx_storage_is_bare(hashfs) && !sx_hashfs_is_orphan(hashfs)) {
 	    raft_hbeat(hashfs, dc > 0, prev_hb_keepalive != hb_keepalive, hb_keepalive, hb_deadtime);
 	    sx_hashfs_checkpoint_hbeatdb(hashfs);
 	}
