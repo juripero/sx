@@ -604,7 +604,7 @@ static void raft_node_state_init(sx_raft_node_state_t *ns, const sx_uuid_t *node
     ns->next_index = next_index;
     /* Clone the node uuid */
     memcpy(&ns->node, node, sizeof(sx_uuid_t));
-    /* Initially assume success when no heartbead has been sent yet. */
+    /* Initially assume success when no heartbeat has been sent yet. */
     memcpy(&ns->last_contact, last_contact, sizeof(struct timeval));
     ns->hbeat_success = 1;
 }

@@ -2297,7 +2297,7 @@ int sx_storage_is_bare(sx_hashfs_t *h) {
     return (h != NULL) && (h->cluster_name == NULL);
 }
 
-static rc_ty update_raft_timeout(sx_hashfs_t *h);
+static rc_ty update_raft_timeout(sx_hashfs_t *h, int first, const sx_node_t *node);
 rc_ty sx_storage_activate(sx_hashfs_t *h, const char *name, const sx_node_t *firstnode, uint8_t *admin_uid, unsigned int uid_size, uint8_t *admin_key, int key_size, uint16_t port, const char *ssl_ca_file) {
     rc_ty r, ret = FAIL_EINTERNAL;
     const sx_uuid_t *node_uuid;
@@ -2383,7 +2383,7 @@ rc_ty sx_storage_activate(sx_hashfs_t *h, const char *name, const sx_node_t *fir
 	goto storage_activate_fail;
     }
 
-    if(update_raft_timeout(h) != OK)
+    if(update_raft_timeout(h, 1, firstnode) != OK)
         goto storage_activate_fail;
 
     if(qcommit(h->db))
@@ -15114,7 +15114,7 @@ rc_ty sx_hashfs_setnodedata(sx_hashfs_t *h, const char *name, const sx_uuid_t *n
        qstep_noret(h->q_setval))
 	goto setnodedata_fail;
 
-    if(update_raft_timeout(h))
+    if(update_raft_timeout(h, 0, NULL))
         goto setnodedata_fail;
 
     if(qcommit(h->db))
@@ -18378,7 +18378,7 @@ sx_hashfs_raft_state_set_err:
 }
 
 /* Last contact time gets reset on storage activation. Must be called inside transaction. */
-static rc_ty update_raft_timeout(sx_hashfs_t *h) {
+static rc_ty update_raft_timeout(sx_hashfs_t *h, int first, const sx_node_t *node) {
     sx_raft_state_t state;
     rc_ty s;
 
@@ -18386,6 +18386,45 @@ static rc_ty update_raft_timeout(sx_hashfs_t *h) {
         return s;
 
     gettimeofday(&state.last_contact, NULL);
+    if(first) {
+        uint64_t hb_keepalive = 0;
+        state.role = RAFT_ROLE_LEADER;
+        state.voted = 0;
+        state.current_term.term++;
+
+        if(!node) {
+            WARN("NULL argument");
+            return EINVAL;
+        }
+
+        if(sx_hashfs_cluster_settings_get_uint64(h, "hb_keepalive", &hb_keepalive) != OK) {
+            WARN("Failed to obtain hb_keepalive setting");
+            return FAIL_EINTERNAL;
+        }
+
+        /* Randomize new ET */
+        state.election_timeout = sxi_rand() % 2 * hb_keepalive + 3 * hb_keepalive; /* inside [3*hb_keepalive,5*hb_keepalive) */
+
+        /* Prepare the node states array for a new leader */
+        state.leader_state.node_states = calloc(1, sizeof(sx_raft_node_state_t));
+        if(!state.leader_state.node_states) {
+            WARN("Failed to allocate node states for a new leader");
+            return FAIL_EINTERNAL;
+        }
+        state.leader_state.nnodes = 1;
+
+        state.leader_state.node_states[0].next_index = 0;
+        /* Clone the node uuid */
+        memcpy(&state.leader_state.node_states[0].node, sx_node_uuid(node), sizeof(sx_uuid_t));
+        /* Initially assume success when no heartbeat has been sent yet. */
+        memcpy(&state.leader_state.node_states[0].last_contact, &state.last_contact, sizeof(struct timeval));
+        state.leader_state.node_states[0].hbeat_success = 1;
+
+        state.leader_state.hdist_version = sx_hashfs_hdist_getversion(h);
+        memcpy(&state.current_term.leader, sx_node_uuid(node), sizeof(sx_uuid_t));
+        state.current_term.has_leader = 1;
+    }
+
     if((s = sx_hashfs_raft_state_set(h, &state)) != OK) {
         sx_hashfs_raft_state_empty(h, &state);
         return s;

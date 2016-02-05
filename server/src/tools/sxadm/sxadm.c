@@ -1531,40 +1531,38 @@ static int info_cluster(sxc_client_t *sx, struct cluster_args_info *args, enum i
 	}
     }
 
-    if(!is_rebalancing) {
-	/* There should be a leader */
-	if(!uuid_from_string(&leaderid, clst_leader_node(clst))) {
-	    const char *role = clst_raft_role(clst);
-	    if(!role || strcmp(role, "leader")) {
-		const sx_node_t *leadernode;
-		/* Query the leader */
+    /* There should be a leader */
+    if(!uuid_from_string(&leaderid, clst_leader_node(clst))) {
+        const char *role = clst_raft_role(clst);
+        if(!role || strcmp(role, "leader")) {
+	    const sx_node_t *leadernode;
+	    /* Query the leader */
 
-		if((leadernode = sx_nodelist_lookup(nodes_prev, &leaderid))) {
-		    sxi_hostlist_t hlist;
+	    if((leadernode = sx_nodelist_lookup(nodes_prev, &leaderid))) {
+	        sxi_hostlist_t hlist;
 
-		    sxi_hostlist_init(&hlist);
-		    if(sxi_hostlist_add_host(sx, &hlist, sx_node_internal_addr(leadernode))) {
-			CRIT("OOM checking leader status");
-			goto info_out;
-		    }
-		    clstleader = clst_query(sxi_cluster_get_conns(clust), &hlist);
-		    sxi_hostlist_empty(&hlist);
-		    if(clstleader) {
-			role = clst_raft_role(clstleader);
-			if(!role || strcmp(role, "leader")) {
-			    clst_destroy(clstleader);
-			    clstleader = NULL;
-			}
+	        sxi_hostlist_init(&hlist);
+	        if(sxi_hostlist_add_host(sx, &hlist, sx_node_internal_addr(leadernode))) {
+		    CRIT("OOM checking leader status");
+		    goto info_out;
+		}
+		clstleader = clst_query(sxi_cluster_get_conns(clust), &hlist);
+		sxi_hostlist_empty(&hlist);
+		if(clstleader) {
+		    role = clst_raft_role(clstleader);
+		    if(!role || strcmp(role, "leader")) {
+		        clst_destroy(clstleader);
+		        clstleader = NULL;
 		    }
 		}
-	    } else
-		clstleader = clst; /* We happen to have already queried the leader */
-	}
-	if(clstleader)
-	    raft_status = clst_raft_nodes_data(clstleader, &raft_nstatus);
-	else
-	    WARN("Election in progress: reported roles may not be accurate");
+	    }
+	} else
+	clstleader = clst; /* We happen to have already queried the leader */
     }
+    if(clstleader)
+        raft_status = clst_raft_nodes_data(clstleader, &raft_nstatus);
+    else
+        WARN("Election in progress: reported roles may not be accurate");
 
     faulty_nodes = clst_faulty_nodes(clst);
     merged = sx_nodelist_new();
