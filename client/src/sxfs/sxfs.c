@@ -3133,25 +3133,27 @@ int main (int argc, char **argv) {
     }
 
     /* cache initialization */
-    if(!cache_created) {
-        cache_size = sxi_parse_size(sx, args.cache_size_arg, 1);
-        if(cache_size < 0) {
-            fprintf(stderr, "%s\n", sxc_geterrmsg(sx));
+    if(!sxfs->need_file) {
+        if(!cache_created) {
+            cache_size = sxi_parse_size(sx, args.cache_size_arg, 1);
+            if(cache_size < 0) {
+                fprintf(stderr, "%s\n", sxc_geterrmsg(sx));
+                goto main_err;
+            }
+        }
+        if(args.cache_dir_given) {
+            cache_dir = strdup(args.cache_dir_arg);
+            if(!cache_dir) {
+                fprintf(stderr, "ERROR: Out of memory\n");
+                goto main_err;
+            }
+        }
+        if(cache_dir && mkdir(cache_dir, 0700)) {
+            fprintf(stderr, "ERROR: Cannot create '%s' directory: %s\n", cache_dir, strerror(errno));
             goto main_err;
         }
+        print_and_log(sxfs->logfile, "Using%s cache size of %s in '%s'\n", (args.cache_size_given || cache_created) ? "" : " default", cache_created ? cache_size_str : args.cache_size_arg, cache_dir ? cache_dir : sxfs->tempdir);
     }
-    if(args.cache_dir_given) {
-        cache_dir = strdup(args.cache_dir_arg);
-        if(!cache_dir) {
-            fprintf(stderr, "ERROR: Out of memory\n");
-            goto main_err;
-        }
-    }
-    if(cache_dir && mkdir(cache_dir, 0700)) {
-        fprintf(stderr, "ERROR: Cannot create '%s' directory: %s\n", cache_dir, strerror(errno));
-        goto main_err;
-    }
-    print_and_log(sxfs->logfile, "Using%s cache size of %s in '%s'\n", (args.cache_size_given || cache_created) ? "" : " default", cache_created ? cache_size_str : args.cache_size_arg, cache_dir ? cache_dir : sxfs->tempdir);
     if(sxfs_cache_init(sx, sxfs, cache_size, cache_dir ? cache_dir : sxfs->tempdir))
         goto main_err;
     /* directory tree */
@@ -3419,7 +3421,7 @@ int main (int argc, char **argv) {
         fprintf(sxfs->logfile, "ERROR: FUSE failed\n");
 main_err:
     free(cache_size_str);
-    if(cache_dir && sxi_rmdirs(cache_dir) && errno != ENOENT) /* remove cache directory with its content */
+    if(cache_dir && strcmp(cache_dir, sxfs->tempdir) && sxi_rmdirs(cache_dir) && errno != ENOENT) /* remove cache directory with its content */
         print_and_log(sxfs->logfile, "ERROR: Cannot remove '%s' directory: %s\n", cache_dir, strerror(errno)); /* 'cache_dir' is created after 'sxfs' */
     free(cache_dir);
     free(volume_name);
@@ -3434,14 +3436,14 @@ main_err:
         if((err = pthread_cond_destroy(&sxfs->upload_cond)))
             print_and_log(sxfs->logfile, "ERROR: Cannot destroy pthread condition: %s\n", strerror(err));
         if(sxfs->files) {
-            unsigned int size = sxi_ht_count(sxfs->files), pathlen;
+            int files_not_uploaded = 0, recovery_failed = 0;
+            unsigned int pathlen;
             char path[SXLIMIT_MAX_FILENAME_LEN+1], path2[PATH_MAX];
             const void *const_path;
             sxfs_file_t *sxfs_file;
 
             if(sxfs->logfile && sxfs->args->debug_flag)
-                fprintf(sxfs->logfile, "%u opened files:\n", size);
-            tmp = 0;
+                fprintf(sxfs->logfile, "%u opened files:\n", sxi_ht_count(sxfs->files));
             sxi_ht_enum_reset(sxfs->files);
             while(!sxi_ht_enum_getnext(sxfs->files, &const_path, &pathlen, NULL)) {
                 if(pathlen >= sizeof(path)) {
@@ -3454,23 +3456,26 @@ main_err:
                     fprintf(sxfs->logfile, "'%s'\n", path);
                 if(sxi_ht_get(sxfs->files, path, strlen(path), (void**)&sxfs_file)) {
                     print_and_log(sxfs->logfile, "ERROR: '%s' file disappeared from hashtable\n", path);
-                    tmp = 1;
+                    files_not_uploaded = recovery_failed = 1; /* don't know what happened, there can be files we don't want to lose */
                     continue;
                 }
                 if(sxfs_file->write_path) {
                     if(close(sxfs_file->write_fd)) /* write_path and write_fd are always set together */
                         print_and_log(sxfs->logfile, "ERROR: Cannot close '%s' file: %s\n", sxfs_file->write_path, strerror(errno));
                     sxfs_file->write_fd = -1;
-                    snprintf(path2, PATH_MAX, "%s/%s", sxfs->lostdir, path);
-                    if(sxfs_build_path(path2)) {
-                        print_and_log(sxfs->logfile, "ERROR: Cannot create '%s' path: %s\n", path2, strerror(errno));
-                        tmp = 1;
-                    } else if(rename(sxfs_file->write_path, path2)) { /* mostly for EXDEV */
-                        if(sxfs_copy_file(sxfs, sxfs_file->write_path, path2)) {
-                            print_and_log(sxfs->logfile, "ERROR: Cannot copy '%s' file to '%s': %s\n", sxfs_file->write_path, path2, strerror(errno));
-                            tmp = 1;
-                        } else if(unlink(sxfs_file->write_path)) {
-                            print_and_log(sxfs->logfile, "ERROR: Cannot remove '%s' file: %s\n", sxfs_file->write_path, strerror(errno));
+                    if(sxfs_file->flush) {
+                        files_not_uploaded = 1;
+                        snprintf(path2, PATH_MAX, "%s/%s", sxfs->lostdir, path);
+                        if(sxfs_build_path(path2)) {
+                            print_and_log(sxfs->logfile, "ERROR: Cannot create '%s' path: %s\n", path2, strerror(errno));
+                            recovery_failed = 1;
+                        } else if(rename(sxfs_file->write_path, path2)) { /* mostly for EXDEV */
+                            if(sxfs_copy_file(sxfs, sxfs_file->write_path, path2)) {
+                                print_and_log(sxfs->logfile, "ERROR: Cannot copy '%s' file to '%s': %s\n", sxfs_file->write_path, path2, strerror(errno));
+                                recovery_failed = 1;
+                            } else if(unlink(sxfs_file->write_path)) {
+                                print_and_log(sxfs->logfile, "ERROR: Cannot remove '%s' file: %s\n", sxfs_file->write_path, strerror(errno));
+                            }
                         }
                     }
                     free(sxfs_file->write_path);
@@ -3478,9 +3483,9 @@ main_err:
                 }
                 sxfs_file_free(sxfs, sxfs_file);
             }
-            if(size) {
+            if(files_not_uploaded) {
                 print_and_log(sxfs->logfile, "WARNING: Some files could not be uploaded and have been saved into '%s'\n", sxfs->lostdir);
-                if(tmp) {
+                if(recovery_failed) {
                     print_and_log(sxfs->logfile, "ERROR: Cannot move some files to the recovery directory. These files are available in '%s/%s'\n", sxfs->tempdir, SXFS_UPLOAD_DIR);
                     sxfs->recovery_failed = 1;
                 }
