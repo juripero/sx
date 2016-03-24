@@ -90,19 +90,33 @@ static void print_msg (const char *fn, const char *level, const char *format_str
 } /* print_msg */
 
 typedef struct {
-    const int for_volume, no_filter, dedicated, additional;
+    const int for_volume, no_filter, dedicated, additional, rand_filters;
     const uint64_t block_size, block_count;
-    const char *name, *filter1_name, *filter1_cfg, *filter2_name, *filter2_cfg;
+    const char *name;
 
-    int (*fun)(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, const sxf_handle_t *filters, int fcount, const char *filter1_name, const char *filter1_cfg, const char *filter2_name, const char *filter2_cfg, const uint64_t block_size, const uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size);
+    int (*fun)(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, int rand_filters, const sxf_handle_t *filters, int fcount, const uint64_t block_size, const uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size);
 } client_test_t;
 
 static int run_test(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, const sxf_handle_t *filters, int fcount, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size, const client_test_t *test) {
     if(!test->fun)
         return -1;
-    int ret= test->fun(sx, cluster, local_dir_path, remote_dir_path, profile_name, cluster_name, filters, fcount, test->filter1_name, test->filter1_cfg, test->filter2_name, test->filter2_cfg, test->block_size, test->block_count, args, max_revisions, check_data_size);
-    return ret;
+    return test->fun(sx, cluster, local_dir_path, remote_dir_path, profile_name, cluster_name, test->rand_filters, filters, fcount, test->block_size, test->block_count, args, max_revisions, check_data_size);
 }
+
+const char *filters_name[] = {"undelete", "zcomp", "aes256", "attribs", NULL};
+const char *filters_cfg[] = {TRASH_NAME, ZCOMP_LEVEL, NULL, NULL, NULL};
+
+static const char* get_filter_cfg (const sxf_handle_t *filter) {
+    int i;
+    const sxc_filter_t *f;
+    if(!filter)
+        return NULL;
+    f = sxc_get_filter(filter);
+    for(i=0; filters_name[i]; i++)
+        if(!strcmp(filters_name[i], f->shortname))
+            return filters_cfg[i];
+    return NULL;
+} /* get_filter_cfg */
 
 int64_t bytes; /* FIXME: small change in libsxclient to avoid this to be global */
 client_test_t tests[];
@@ -615,7 +629,7 @@ create_file_err:
     return ret;
 } /* create_file */
 
-static int test_empty_file(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, const sxf_handle_t *filters, int fcount, const char *filter1_name, const char *filter1_cfg, const char *filter2_name, const char *filter2_cfg, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
+static int test_empty_file(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, int rand_filters, const sxf_handle_t *filters, int fcount, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
     int ret = 1;
     char *local_file_path, *remote_file_path = NULL;
     sxc_uri_t *uri;
@@ -656,7 +670,7 @@ test_empty_file_err:
     return ret;
 } /* test_empty_file */
 
-static int test_transfer(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, const sxf_handle_t *filters, int fcount, const char *filter1_name, const char *filter1_cfg, const char *filter2_name, const char *filter2_cfg, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
+static int test_transfer(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, int rand_filters, const sxf_handle_t *filters, int fcount, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
     int ret = 1;
     char *local_file_path = NULL, *remote_file_path = NULL;
     unsigned char *block = NULL, hash1[SXI_SHA1_BIN_LEN], hash2[SXI_SHA1_BIN_LEN];
@@ -757,7 +771,7 @@ test_transfer_err:
     return ret;
 } /* test_transfer */
 
-static int test_revision(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, const sxf_handle_t *filters, int fcount, const char *filter1_name, const char *filter1_cfg, const char *filter2_name, const char *filter2_cfg, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
+static int test_revision(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, int rand_filters, const sxf_handle_t *filters, int fcount, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
     int ret = 1;
     char *local_file_path = NULL, *remote_file_path = NULL;
     unsigned char *block, hash[SXI_SHA1_BIN_LEN], **hashes = NULL;
@@ -971,7 +985,7 @@ test_revision_err:
     return ret;
 } /* test_revision */
 
-static int test_cat(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, const sxf_handle_t *filters, int fcount, const char *filter1_name, const char *filter1_cfg, const char *filter2_name, const char *filter2_cfg, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
+static int test_cat(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, int rand_filters, const sxf_handle_t *filters, int fcount, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
     int fd = 0, ret = 1, tmp;
     char *local_file_path = NULL, *cat_file_path = NULL, *remote_file_path = NULL;
     unsigned char *block = NULL, hash_in[SXI_SHA1_BIN_LEN], hash_out[SXI_SHA1_BIN_LEN];
@@ -1093,7 +1107,7 @@ test_cat_err:
     return ret;
 } /* test_cat */
 
-static int test_errors(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, const sxf_handle_t *filters, int fcount, const char *filter1_name, const char *filter1_cfg, const char *filter2_name, const char *filter2_cfg, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
+static int test_errors(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, int rand_filters, const sxf_handle_t *filters, int fcount, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
     int ret = 1;
     char *local_file_path, *remote_file_path = NULL, *wrong_name = NULL, revision[]="2014-13-32 25:61:69.460:ac6ed3c7a371107a763da500c165c37c"; /* Revision is made of impossible date + md5sum of /dev/urandom */
     sxc_uri_t *uri = NULL;
@@ -1244,7 +1258,7 @@ test_errors_err:
     return ret;
 } /* test_errors */
 
-static int test_attribs(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, const sxf_handle_t *filters, int fcount, const char *filter1_name, const char *filter1_cfg, const char *filter2_name, const char *filter2_cfg, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
+static int test_attribs(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, int rand_filters, const sxf_handle_t *filters, int fcount, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
     int i, ret = 1, owner, group, other;
     long int tmp_time;
     char *local_files_paths[ATTRIBS_COUNT], *remote_files_paths[ATTRIBS_COUNT];
@@ -1345,7 +1359,7 @@ test_attribs_err:
     return ret;
 } /* test_attribs */
 
-static int test_undelete(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, const sxf_handle_t *filters, int fcount, const char *filter1_name, const char *filter1_cfg, const char *filter2_name, const char *filter2_cfg, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
+static int test_undelete(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, int rand_filters, const sxf_handle_t *filters, int fcount, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
     int ret = 1;
     char *local_file_path, *remote_file_path = NULL;
     sxc_uri_t *uri;
@@ -1660,7 +1674,7 @@ static int cmp_meta(sxc_client_t *sx, sxc_meta_t *a, sxc_meta_t *b, int hide_err
     return 0;
 }
 
-static int test_volmeta(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, const sxf_handle_t *filters, int fcount, const char *filter1_name, const char *filter1_cfg, const char *filter2_name, const char *filter2_cfg, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
+static int test_volmeta(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, int rand_filters, const sxf_handle_t *filters, int fcount, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
     int ret = -1;
     sxc_meta_t *custom_meta = NULL, *custom_meta_remote = NULL;
     sxc_file_t *file = NULL;
@@ -1679,8 +1693,7 @@ static int test_volmeta(sxc_client_t *sx, sxc_cluster_t *cluster, const char *lo
     }
 
     vdata[0].owner = udata[0].username;
-    vdata[0].filter_name = filter1_name;
-    vdata[0].filter_cfg = filter1_cfg;
+    vdata[0].filter_name = vdata[0].filter_cfg = NULL;
     vdata[0].replica = args->replica_arg;
     /* Create 1 volume owned by user1 */
     if(prepare_volumes(sx, cluster, filters, fcount, vdata, sizeof(vdata) / sizeof(*vdata), args->human_flag, 1)) {
@@ -1836,7 +1849,7 @@ test_volmeta_err:
     return ret;
 }
 
-static int test_user_quota(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, const sxf_handle_t *filters, int fcount, const char *filter1_name, const char *filter1_cfg, const char *filter2_name, const char *filter2_cfg, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
+static int test_user_quota(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, int rand_filters, const sxf_handle_t *filters, int fcount, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
     int ret = -1, file_created = 0;
     sxc_meta_t *custom_meta = NULL, *custom_meta_remote = NULL;
     sxc_file_t *src = NULL, *dest = NULL;
@@ -1966,7 +1979,7 @@ test_user_quota_err:
     return ret;
 }
 
-static int test_volume_quota(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, const sxf_handle_t *filters, int fcount, const char *filter1_name, const char *filter1_cfg, const char *filter2_name, const char *filter2_cfg, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
+static int test_volume_quota(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, int rand_filters, const sxf_handle_t *filters, int fcount, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
     int ret = 1, file = 0, qret;
     char *volname, *local_file_path = NULL, *remote_path = NULL;
     sxc_file_t *src = NULL, *dest = NULL;
@@ -2073,8 +2086,8 @@ static int check_single_meta(sxc_client_t *sx, sxc_meta_t *fmeta, const char *fi
                 return -1;
             }
     } else if(!strcmp(filter_name, "aes256")) {
-        if(sxc_meta_count(fmeta) != 0) {
-            ERROR("%s: Wrong number of entries (%u != 0)", filter_name, sxc_meta_count(fmeta));
+        if(sxc_meta_count(fmeta) != 2) {
+            ERROR("%s: Wrong number of entries (%u != 2)", filter_name, sxc_meta_count(fmeta));
             return -1;
         }
     } else if(!strcmp(filter_name, "zcomp")) {
@@ -2115,13 +2128,15 @@ check_files_meta_err:
     return ret;
 } /* check_files_meta */
 
-static int test_copy(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, const sxf_handle_t *filters, int fcount, const char *filter1_name, const char *filter1_cfg, const char *filter2_name, const char *filter2_cfg, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
+static int test_copy(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, int rand_filters, const sxf_handle_t *filters, int fcount, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
     int ret = 1, tmp;
+    uint64_t r;
     char *local_file_path = NULL, *remote_file1_path = NULL, *remote_file2_path = NULL;
     unsigned char block[SX_BS_MEDIUM], hash1[SXI_SHA1_BIN_LEN], hash2[SXI_SHA1_BIN_LEN];
     FILE *file = NULL;
     sxc_uri_t *uri = NULL;
     sxc_file_t *src = NULL, *dest = NULL;
+    const sxc_filter_t *filter;
     sxi_md_ctx *ctx = sxi_md_init();
     struct vol_data vdata[2];
 
@@ -2131,13 +2146,66 @@ static int test_copy(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local
         ERROR("Cannot allocate memory for checksum");
         return ret;
     }
-    PRINT("Filters: %s (%s) and %s (%s)", filter1_name, filter1_cfg, filter2_name, filter2_cfg);
     vdata[0].owner = vdata[1].owner = args->owner_arg;
-    vdata[0].filter_name = filter1_name;
-    vdata[0].filter_cfg = filter1_cfg;
-    vdata[1].filter_name = filter2_name;
-    vdata[1].filter_cfg = filter2_cfg;
     vdata[0].replica = vdata[1].replica = args->replica_arg;
+    if(rand_filters) {
+        uint64_t seed = make_seed();
+        rnd_state_t state;
+
+        if(fcount < 2) {
+            ERROR("Not enough filters to run this test");
+            return 0; /* TODO: is it a failure or not? */
+        } else if(fcount == 2) {
+            int i = 0;
+            for(; i<fcount; i++) {
+                filter = sxc_get_filter(&filters[i]);
+                if(!strcmp(filter->uuid, "35a5404d-1513-4009-904c-6ee5b0cd8634")) { /* We have 2 filters, cannot use one of them, 1 left */
+                    ERROR("Not enough filters to run this test");
+                    return 0; /* TODO: is it a failure or not? */
+                }
+            }
+        }
+        rnd_seed(&state, seed);
+        if(args->use_filter_given) {
+            int i = 0;
+            filter = NULL;
+            for(; i<fcount; i++) {
+                filter = sxc_get_filter(&filters[i]);
+                if(!strcmp(filter->shortname, args->use_filter_arg))
+                    break;
+                filter = NULL;
+            }
+            if(!filter) {
+                ERROR("'%s' filter not found", args->use_filter_arg);
+                return ret;
+            }
+            vdata[0].filter_name = filter->shortname;
+            vdata[0].filter_cfg = get_filter_cfg(&filters[i]);
+        } else do {
+            r = rand_2cmres(&state) % (uint64_t)fcount;
+            filter = sxc_get_filter(&filters[r]);
+            if(!filter) {
+                ERROR("Cannot randomize the filter to use");
+                return ret;
+            }
+            vdata[0].filter_name = filter->shortname;
+            vdata[0].filter_cfg = get_filter_cfg(&filters[r]);
+        } while(!strcmp(filter->uuid, "35a5404d-1513-4009-904c-6ee5b0cd8634")); /* Skip old aes filter */
+        do {
+            r = rand_2cmres(&state) % (uint64_t)fcount;
+            filter = sxc_get_filter(&filters[r]);
+            if(!filter) {
+                ERROR("Cannot randomize the filter to use");
+                return ret;
+            }
+        } while(!strcmp(filter->uuid, "35a5404d-1513-4009-904c-6ee5b0cd8634") || !strcmp(filter->shortname, vdata[0].filter_name)); /* Skip old aes filter */
+        vdata[1].filter_name = filter->shortname;
+        vdata[1].filter_cfg = get_filter_cfg(&filters[r]);
+        PRINT("Filters: %s (%s) and %s (%s)", vdata[0].filter_name, vdata[0].filter_cfg, vdata[1].filter_name, vdata[1].filter_cfg);
+    } else {
+        vdata[0].filter_name = vdata[0].filter_cfg = vdata[1].filter_name = vdata[1].filter_cfg = NULL;
+        PRINT("No filters");
+    }
     if(prepare_volumes(sx, cluster, filters, fcount, vdata, sizeof(vdata) / sizeof(*vdata), args->human_flag, 0)) {
         ERROR("Failed to prepare volumes");
         goto test_copy_err;
@@ -2201,7 +2269,7 @@ static int test_copy(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local
         ERROR("Cannot upload '%s' file: %s", remote_file2_path, sxc_geterrmsg(sx));
         goto test_copy_err;
     }
-    if(check_files_meta(sx, src, filter1_name, dest, filter2_name))
+    if(check_files_meta(sx, src, vdata[0].filter_name, dest, vdata[1].filter_name))
         goto test_copy_err;
     PRINT("Downloading file");
     if(download_file(sx, cluster, local_file_path, remote_file2_path, &file)) {
@@ -2261,7 +2329,7 @@ struct files_transfer {
     char src[SXLIMIT_MAX_FILENAME_LEN + 1], dest[SXLIMIT_MAX_FILENAME_LEN + 1];
 };
 
-static int test_paths(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, const sxf_handle_t *filters, int fcount, const char *filter1_name, const char *filter1_cfg, const char *filter2_name, const char *filter2_cfg, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
+static int test_paths(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, int rand_filters, const sxf_handle_t *filters, int fcount, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
     int ret = -1;
     unsigned int i;
     char *local_file_path = NULL;
@@ -2271,10 +2339,7 @@ static int test_paths(sxc_client_t *sx, sxc_cluster_t *cluster, const char *loca
 
     PRINT("Started");
     memset(vdata, 0, sizeof(vdata));
-    vdata[0].filter_name = filter1_name;
-    vdata[0].filter_cfg = filter1_cfg;
-    vdata[1].filter_name = filter2_name;
-    vdata[1].filter_cfg = filter2_cfg;
+    vdata[0].filter_name = vdata[0].filter_cfg = vdata[1].filter_name = vdata[1].filter_cfg = NULL;
     vdata[0].owner = vdata[1].owner = args->owner_arg;
     vdata[0].replica = vdata[1].replica = args->replica_arg;
     if(prepare_volumes(sx, cluster, filters, fcount, vdata, sizeof(vdata) / sizeof(*vdata), args->human_flag, 0)) {
@@ -2525,7 +2590,7 @@ check_admin_err:
     return ret;
 } /* check_admin */
 
-static int test_acl(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, const sxf_handle_t *filters, int fcount, const char *filter1_name, const char *filter1_cfg, const char *filter2_name, const char *filter2_cfg, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
+static int test_acl(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, int rand_filters, const sxf_handle_t *filters, int fcount, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
     int ret = 1;
     unsigned int i;
     char key_tmp[AUTHTOK_ASCII_LEN], *local_file_path = NULL, *remote_file_path = NULL;
@@ -2551,11 +2616,8 @@ static int test_acl(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_
         goto test_acl_err;
     }
     vdata[0].owner = udata[0].username;
-    vdata[0].filter_name = filter1_name;
-    vdata[0].filter_cfg = filter1_cfg;
+    vdata[0].filter_name = vdata[0].filter_cfg = vdata[1].filter_name = vdata[1].filter_cfg = NULL;
     vdata[1].owner = udata[1].username;
-    vdata[1].filter_name = filter2_name;
-    vdata[1].filter_cfg = filter2_cfg;
     vdata[0].replica = vdata[1].replica = args->replica_arg;
     if(sxc_cluster_set_access(cluster, udata[0].username)) {
         ERROR("Failed to set '%s' profile authentication: %s", udata[0].username, sxc_geterrmsg(sx));
@@ -2920,41 +2982,27 @@ test_acl_err:
  * REMEMBER TO CHECK WHETHER THE VOLUME SIZE IS BIG ENOUGH!!
  */
 client_test_t tests[] = {
-    {1, 1, 0, 0, 0, 0, "empty_file", NULL, NULL, NULL, NULL, test_empty_file},
-    {1, 0, 0, 0, SX_BS_SMALL, 26, "transfer:small", NULL, NULL, NULL, NULL, test_transfer},
-    {1, 0, 0, 0, SX_BS_MEDIUM, 2314, "transfer:medium", NULL, NULL, NULL, NULL, test_transfer},
-    {1, 0, 0, 1, SX_BS_LARGE, 285, "transfer:large", NULL, NULL, NULL, NULL, test_transfer},
-    {1, 1, 0, 0, SX_BS_SMALL, 29, "revision:small", NULL, NULL, NULL, NULL, test_revision},
-    {1, 1, 0, 0, SX_BS_MEDIUM, 649, "revision:medium", NULL, NULL, NULL, NULL, test_revision},
-    {1, 1, 0, 1, SX_BS_LARGE, 131, "revision:large", NULL, NULL, NULL, NULL, test_revision},
-    {1, 1, 0, 0, 0, 0, "cat", NULL, NULL, NULL, NULL, test_cat},
-    {1, 1, 0, 0, 0, 0, "errors", NULL, NULL, NULL, NULL, test_errors},
-    {1, 0, 1, 0, 0, 0, "attribs", NULL, NULL, NULL, NULL, test_attribs},
-    {1, 0, 1, 0, 0, 0, "undelete", NULL, NULL, NULL, NULL, test_undelete},
-    {0, 0, 0, 0, 0, 0, "volume_meta", NULL, NULL, NULL, NULL, test_volmeta},
-    {0, 0, 0, 0, 0, 0, "quota:user", NULL, NULL, NULL, NULL, test_user_quota},
-    {0, 0, 0, 0, 0, 0, "quota:volume", NULL, NULL, NULL, NULL, test_volume_quota},
-    {0, 0, 0, 0, 0, 0, "copy", NULL, NULL, NULL, NULL, test_copy},
-    {0, 0, 0, 0, 0, 0, "copy:filters", "attribs", NULL, "zcomp", "level:1", test_copy},
-    {0, 0, 0, 0, 0, 0, "paths", NULL, NULL, NULL, NULL, test_paths},
-    {0, 0, 0, 0, 0, 0, "acl", NULL, NULL, NULL, NULL, test_acl},
-    {-1, -1, -1, -1, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL}
+/*  {for_volume, no_filter, dedicated, additional, rand_filters, block_size, block_count, name, function},*/
+    {1, 1, 0, 0, 0, 0, 0, "empty_file", test_empty_file},
+    {1, 0, 0, 0, 0, SX_BS_SMALL, 26, "transfer:small", test_transfer},
+    {1, 0, 0, 0, 0, SX_BS_MEDIUM, 2314, "transfer:medium", test_transfer},
+    {1, 0, 0, 1, 0, SX_BS_LARGE, 285, "transfer:large", test_transfer},
+    {1, 1, 0, 0, 0, SX_BS_SMALL, 29, "revision:small", test_revision},
+    {1, 1, 0, 0, 0, SX_BS_MEDIUM, 649, "revision:medium", test_revision},
+    {1, 1, 0, 1, 0, SX_BS_LARGE, 131, "revision:large", test_revision},
+    {1, 1, 0, 0, 0, 0, 0, "cat", test_cat},
+    {1, 1, 0, 0, 0, 0, 0, "errors", test_errors},
+    {1, 0, 1, 0, 0, 0, 0, "attribs", test_attribs},
+    {1, 0, 1, 0, 0, 0, 0, "undelete", test_undelete},
+    {0, 0, 0, 0, 0, 0, 0, "volume_meta", test_volmeta},
+    {0, 0, 0, 0, 0, 0, 0, "quota:user", test_user_quota},
+    {0, 0, 0, 0, 0, 0, 0, "quota:volume", test_volume_quota},
+    {0, 0, 0, 0, 0, 0, 0, "copy", test_copy},
+    {0, 0, 0, 0, 1, 0, 0, "copy:filters", test_copy},
+    {0, 0, 0, 0, 0, 0, 0, "paths", test_paths},
+    {0, 0, 0, 0, 0, 0, 0, "acl", test_acl},
+    {-1, -1, -1, -1, -1, 0, 0, NULL, NULL}
 };
-
-const char *filters_name[] = {"undelete", "zcomp", "aes256", "attribs", NULL};
-const char *filters_cfg[] = {TRASH_NAME, ZCOMP_LEVEL, NULL, NULL, NULL};
-
-static const char* get_filter_cfg (const sxf_handle_t *filter) {
-    int i;
-    const sxc_filter_t *f;
-    if(!filter)
-        return NULL;
-    f = sxc_get_filter(filter);
-    for(i=0; filters_name[i]; i++)
-        if(!strcmp(filters_name[i], f->shortname))
-            return filters_cfg[i];
-    return NULL;
-} /* get_filter_cfg */
 
 int main(int argc, char **argv) {
     int i, j, ret = 1, fcount = 0;
