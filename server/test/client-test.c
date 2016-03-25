@@ -631,6 +631,59 @@ create_file_err:
     return ret;
 } /* create_file */
 
+/* -1 - error
+    0 - OK
+    1 - hashes differ */
+static int check_file_content(const char *path, unsigned char sha_hash[SXI_SHA1_BIN_LEN]) {
+    int ret = -1, fd;
+    char buff[1024];
+    unsigned char local_hash[SXI_SHA1_BIN_LEN];
+    ssize_t rbytes;
+    sxi_md_ctx *ctx = sxi_md_init();
+
+    if(!ctx) {
+        ERROR("Cannot allocate memory for checksum");
+        return -1;
+    }
+    if(!sxi_sha1_init(ctx)) {
+        ERROR("Checksum init failure");
+        goto check_file_content_err;
+    }
+    fd = open(path, O_RDONLY);
+    if(fd < 0) {
+        ERROR("Cannot open '%s' file: %s", path, strerror(errno));
+        goto check_file_content_err;
+    }
+    while(1) {
+        if((rbytes = read(fd, buff, sizeof(buff))) < 0) {
+            ERROR("Cannot read from '%s' file: %s", path, strerror(errno));
+            goto check_file_content_err;
+        }
+        if(!rbytes)
+            break;
+        if(!sxi_sha1_update(ctx, buff, rbytes)) {
+            ERROR("Checksum update failure");
+            goto check_file_content_err;
+        }
+    }
+    if(!sxi_sha1_final(ctx, local_hash, NULL)) {
+        ERROR("Checksum final calculation failure");
+        goto check_file_content_err;
+    }
+    if(memcmp(sha_hash, local_hash, SXI_SHA1_BIN_LEN)) {
+        ERROR("Hashes differ");
+        ret = 1;
+        goto check_file_content_err;
+    }
+
+    ret = 0;
+check_file_content_err:
+    sxi_md_cleanup(&ctx);
+    if(fd >= 0)
+        close(fd);
+    return ret;
+} /* check_file_content */
+
 static int test_empty_file(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, int rand_filters, const sxf_handle_t *filters, int fcount, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, unsigned int max_revisions, int check_data_size) {
     int ret = 1;
     char *local_file_path, *remote_file_path = NULL;
@@ -675,24 +728,17 @@ test_empty_file_err:
 static int test_transfer(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, int rand_filters, const sxf_handle_t *filters, int fcount, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, unsigned int max_revisions, int check_data_size) {
     int ret = 1;
     char *local_file_path = NULL, *remote_file_path = NULL;
-    unsigned char *block = NULL, hash1[SXI_SHA1_BIN_LEN], hash2[SXI_SHA1_BIN_LEN];
-    FILE *file = NULL;
-    sxi_md_ctx *ctx = sxi_md_init();
-    size_t tmp;
+    unsigned char *block = NULL, hash[SXI_SHA1_BIN_LEN];
 
     PRINT("Started");
-    if(!ctx) {
-        ERROR("Cannot allocate memory for checksum");
-        return ret;
-    }
     if(sxc_cluster_set_progress_cb(sx, cluster, test_callback, (void*)&bytes)) {
         ERROR("Cannot set callback");
-        goto test_transfer_err;
+        return ret;
     }
     block = (unsigned char*)malloc(block_size);
     if(!block) {
         ERROR("Cannot allocate memory for block");
-        goto test_transfer_err;
+        return ret;
     }
     local_file_path = (char*)malloc(strlen(local_dir_path) + strlen(UD_FILE_NAME) + 1);
     if(!local_file_path) {
@@ -710,7 +756,7 @@ static int test_transfer(sxc_client_t *sx, sxc_cluster_t *cluster, const char *l
         PRINT("Creating file of size: %.2f%c (%llu*%.0f%c)", to_human(block_size*block_count), to_human_suffix(block_size*block_count), (unsigned long long)block_count, to_human(block_size), to_human_suffix(block_size));
     else
         PRINT("Creating file of size: %llu (%llu*%llu)", (unsigned long long)block_size*block_count, (unsigned long long)block_count, (unsigned long long)block_size);
-    if(create_file(local_file_path, block_size, block_count, hash1, 0, NULL))
+    if(create_file(local_file_path, block_size, block_count, hash, 0, NULL))
         goto test_transfer_err;
     PRINT("Uploading");
     if(upload_file(sx, cluster, local_file_path, remote_dir_path, 0)) {
@@ -728,7 +774,7 @@ static int test_transfer(sxc_client_t *sx, sxc_cluster_t *cluster, const char *l
         goto test_transfer_err;
     }
     PRINT("Downloading");
-    if(download_file(sx, cluster, local_file_path, remote_file_path, &file)) {
+    if(download_file(sx, cluster, local_file_path, remote_file_path, NULL)) {
         ERROR("Cannot download '%s' file", remote_file_path);
         goto test_transfer_err;
     }
@@ -736,36 +782,21 @@ static int test_transfer(sxc_client_t *sx, sxc_cluster_t *cluster, const char *l
         ERROR("Cannot remove '%s' file: %s", remote_file_path, sxc_geterrmsg(sx));
         goto test_transfer_err;
     }
-    if(!sxi_sha1_init(ctx)) {
-        ERROR("Checksum init failure");
-        goto test_transfer_err;
-    }
-    while((tmp = fread(block, sizeof(unsigned char), block_size, file))) {
-        if(!sxi_sha1_update(ctx, block, tmp)) {
-            ERROR("Checksum update failure");
+    switch(check_file_content(local_file_path, hash)) {
+        case -1:
+            ERROR("Checking file content failed");
             goto test_transfer_err;
-        }
-        if(tmp < block_size) {
-            ERROR("Only a part of file has been downloaded");
+        case 0: /* Downloaded file is correct */
+            break;
+        case 1:
+            ERROR("Downloaded file differs from the original one");
             goto test_transfer_err;
-        }
-    }
-    if(!sxi_sha1_final(ctx, hash2, NULL)) {
-        ERROR("Checksum final calculation failure");
-        goto test_transfer_err;
-    }
-    if(memcmp(hash1, hash2, SXI_SHA1_BIN_LEN)) {
-        ERROR("Uploaded and downloaded file differs");
-        goto test_transfer_err;
     }
     
     ret = 0;
     PRINT("Succeeded");
 test_transfer_err:
     free(block);
-    sxi_md_cleanup(&ctx);
-    if(file && fclose(file) == EOF)
-        WARNING("Cannot close '%s' file: %s", local_file_path, strerror(errno));
     if(local_file_path && unlink(local_file_path) && errno != ENOENT)
         WARNING("Cannot delete '%s' file: %s", local_file_path, strerror(errno));
     free(local_file_path);
@@ -776,24 +807,18 @@ test_transfer_err:
 static int test_revision(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, int rand_filters, const sxf_handle_t *filters, int fcount, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, unsigned int max_revisions, int check_data_size) {
     int ret = 1;
     char *local_file_path = NULL, *remote_file_path = NULL;
-    unsigned char *block, hash[SXI_SHA1_BIN_LEN], **hashes = NULL;
+    unsigned char *block, **hashes = NULL;
     FILE *file = NULL;
-    sxi_md_ctx *ctx = sxi_md_init();
     sxc_uri_t *uri = NULL;
     sxc_file_t *src = NULL, *dest = NULL;
     sxc_revlist_t *revs = NULL;
     unsigned int i;
-    size_t tmp;
 
     PRINT("Started (revision: %d)", max_revisions);
-    if(!ctx) {
-        ERROR("Cannot allocate memory for checksum");
-        return ret;
-    }
     block = (unsigned char*)malloc(block_size);
     if(!block) {
         ERROR("Cannot allocate memory for block");
-        goto test_revision_err;
+        return ret;
     }
     hashes = (unsigned char**)calloc(max_revisions, sizeof(unsigned char*));
     if(!hashes) {
@@ -887,44 +912,18 @@ static int test_revision(sxc_client_t *sx, sxc_cluster_t *cluster, const char *l
             ERROR("Cannot download '%s' file: %s", remote_file_path, sxc_geterrmsg(sx));
             goto test_revision_err;
         }
-        file = fopen(local_file_path, "rb");
-        if(!file) {
-            ERROR("Cannot open '%s' file: %s", remote_file_path, strerror(errno));
-            goto test_revision_err;
-        }
-        if(!sxi_sha1_init(ctx)) {
-            ERROR("Checksum init failure while downloading file (%d)", i);
-            goto test_revision_err;
-        }
-        while((tmp = fread(block, sizeof(unsigned char), block_size, file))) {
-            if(!sxi_sha1_update(ctx, block, tmp)) {
-                ERROR("Checksum update failure while downloading file (%d)", i);
+        switch(check_file_content(local_file_path, hashes[i])) {
+            case -1:
+                ERROR("Checking file content failed (%d)", i);
                 goto test_revision_err;
-            }
-            if(tmp < block_size) {
-                ERROR("Downloaded only a part of file");
+            case 0: /* Downloaded file is correct */
+                break;
+            case 1:
+                ERROR("Downloaded file differs from the original one (%d)", i);
                 goto test_revision_err;
-            }
-        }
-        if(fclose(file) == EOF) {
-            ERROR("Cannot close '%s' file: %s", local_file_path, strerror(errno));
-            if(unlink(local_file_path))
-                ERROR("Cannot delete '%s' file: %s", local_file_path, strerror(errno));
-            file = NULL;
-            goto test_revision_err;
         }
         if(unlink(local_file_path)) {
             ERROR("Cannot delete '%s' file: %s", local_file_path, strerror(errno));
-            file = NULL;
-            goto test_revision_err;
-        }
-        file = NULL;
-        if(!sxi_sha1_final(ctx, hash, NULL)) {
-            ERROR("Checksum final calculation failure while downloading file (%d)", i);
-            goto test_revision_err;
-        }
-        if(memcmp(hash, hashes[i], SXI_SHA1_BIN_LEN)) {
-            ERROR("Uploaded and downloaded file differs (%d)", i);
             goto test_revision_err;
         }
     }
@@ -981,7 +980,6 @@ test_revision_err:
             free(hashes[i]);
     free(hashes);
     free(block);
-    sxi_md_cleanup(&ctx);
     sxc_free_uri(uri);
     sxc_file_free(src);
     sxc_file_free(dest);
@@ -990,23 +988,17 @@ test_revision_err:
 } /* test_revision */
 
 static int test_cat(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, int rand_filters, const sxf_handle_t *filters, int fcount, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, unsigned int max_revisions, int check_data_size) {
-    int fd = 0, ret = 1, tmp;
+    int fd = 0, ret = 1;
     char *local_file_path = NULL, *cat_file_path = NULL, *remote_file_path = NULL;
-    unsigned char *block = NULL, hash_in[SXI_SHA1_BIN_LEN], hash_out[SXI_SHA1_BIN_LEN];
-    FILE *file = NULL;
+    unsigned char *block = NULL, hash[SXI_SHA1_BIN_LEN];
     sxc_uri_t *uri = NULL;
     sxc_file_t *src = NULL;
-    sxi_md_ctx *ctx = sxi_md_init();
 
     PRINT("Started");
-    if(!ctx) {
-        ERROR("Cannot allocate memory for checksum");
-        return ret;
-    }
     block = (unsigned char*)malloc(SX_BS_LARGE);
     if(!block) {
         ERROR("Cannot allocate memory for block");
-        goto test_cat_err;
+        return ret;
     }
     local_file_path = (char*)malloc(strlen(local_dir_path) + strlen(CAT_FILE_NAME_IN) + 1);
     if(!local_file_path) {
@@ -1026,7 +1018,7 @@ static int test_cat(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_
         goto test_cat_err;
     }
     sprintf(remote_file_path, "%s%s", remote_dir_path, CAT_FILE_NAME_IN);
-    if(create_file(local_file_path, SX_BS_LARGE, CAT_FILE_SIZE, hash_in, 1, NULL))
+    if(create_file(local_file_path, SX_BS_LARGE, CAT_FILE_SIZE, hash, 1, NULL))
         goto test_cat_err;
     if(upload_file(sx, cluster, local_file_path, remote_file_path, 0)) {
         ERROR("Cannot upload '%s' file", local_file_path);
@@ -1058,40 +1050,15 @@ static int test_cat(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_
         ERROR("%s", sxc_geterrmsg(sx));
         goto test_cat_err;
     }
-    file = fopen(cat_file_path, "rb");
-    if(!file) {
-        ERROR("Cannot open '%s' file: %s", cat_file_path, strerror(errno));
-        goto test_cat_err;
-    }
-    if(!sxi_sha1_init(ctx)) {
-        ERROR("Checksum init failure");
-        if(fclose(file))
-            ERROR("Cannot close '%s' file: %s", cat_file_path, strerror(errno));
-        goto test_cat_err;
-    }
-    while((tmp = fread(block, sizeof(unsigned char), SX_BS_LARGE, file))) {
-        if(!sxi_sha1_update(ctx, block, tmp)) {
-            ERROR("Checksum update failure");
-            if(fclose(file))
-                ERROR("Cannot close '%s' file: %s", cat_file_path, strerror(errno));
+    switch(check_file_content(cat_file_path, hash)) {
+        case -1:
+            ERROR("Checking file content failed");
             goto test_cat_err;
-        }
-        if(tmp < SX_BS_LARGE) {
-            if(fclose(file))
-                ERROR("Cannot close '%s' file: %s", cat_file_path, strerror(errno));
-            fclose(file);
+        case 0: /* Downloaded file is correct */
+            break;
+        case 1:
+            ERROR("Downloaded file differs from the original one");
             goto test_cat_err;
-        }
-    }
-    if(fclose(file))
-        ERROR("Cannot close '%s' file: %s", cat_file_path, strerror(errno));
-    if(!sxi_sha1_final(ctx, hash_out, NULL)) {
-        ERROR("Checksum final calculation failure");
-        goto test_cat_err;
-    }
-    if(memcmp(hash_in, hash_out, SXI_SHA1_BIN_LEN)) {
-        ERROR("File from cat differs");
-        goto test_cat_err;
     }
     PRINT("Succeeded");
 
@@ -1105,7 +1072,6 @@ test_cat_err:
     free(local_file_path);
     free(cat_file_path);
     free(remote_file_path);
-    sxi_md_cleanup(&ctx);
     sxc_free_uri(uri);
     sxc_file_free(src);
     return ret;
@@ -2182,26 +2148,20 @@ check_files_meta_err:
 } /* check_files_meta */
 
 static int test_copy(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, int rand_filters, const sxf_handle_t *filters, int fcount, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, unsigned int max_revisions, int check_data_size) {
-    int ret = 1, tmp;
+    int ret = 1;
     char *local_file_path = NULL, *remote_file1_path = NULL, *remote_file2_path = NULL;
-    unsigned char block[SX_BS_MEDIUM], hash1[SXI_SHA1_BIN_LEN], hash2[SXI_SHA1_BIN_LEN];
-    FILE *file = NULL;
+    unsigned char hash[SXI_SHA1_BIN_LEN];
     sxc_uri_t *uri = NULL;
     sxc_file_t *src = NULL, *dest = NULL;
-    sxi_md_ctx *ctx = sxi_md_init();
     struct vol_data vdata[2];
 
     PRINT("Started");
     memset(vdata, 0, sizeof(vdata));
-    if(!ctx) {
-        ERROR("Cannot allocate memory for checksum");
-        return ret;
-    }
     vdata[0].owner = vdata[1].owner = args->owner_arg;
     vdata[0].replica = vdata[1].replica = args->replica_arg;
     if(get_filters(filters, fcount, vdata, sizeof(vdata)/sizeof(*vdata), rand_filters, args)) {
         ERROR("Cannot get filters");
-        goto test_copy_err;
+        return ret;
     }
     PRINT("Filters: %s (%s) and %s (%s)", vdata[0].filter_name, vdata[0].filter_cfg, vdata[1].filter_name, vdata[1].filter_cfg);
     if(prepare_volumes(sx, cluster, filters, fcount, vdata, sizeof(vdata) / sizeof(*vdata), args->human_flag, 0)) {
@@ -2226,7 +2186,7 @@ static int test_copy(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local
         goto test_copy_err;
     }
     sprintf(remote_file2_path, "sx://%s%s%s/%s/%s/%s", profile_name ? profile_name : "", profile_name ? "@" : "", cluster_name, vdata[1].name, REMOTE_DIR, COPY_FILE_NAME);
-    if(create_file(local_file_path, SX_BS_MEDIUM, 10, hash1, 1, NULL))
+    if(create_file(local_file_path, SX_BS_MEDIUM, 10, hash, 1, NULL))
         goto test_copy_err;
     PRINT("Uploading file");
     if(upload_file(sx, cluster, local_file_path, remote_file1_path, 0)) {
@@ -2270,31 +2230,19 @@ static int test_copy(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local
     if(check_files_meta(sx, src, vdata[0].filter_name, dest, vdata[1].filter_name))
         goto test_copy_err;
     PRINT("Downloading file");
-    if(download_file(sx, cluster, local_file_path, remote_file2_path, &file)) {
+    if(download_file(sx, cluster, local_file_path, remote_file2_path, NULL)) {
         ERROR("Cannot download '%s' file", remote_file2_path);
         goto test_copy_err;
     }
-    if(!sxi_sha1_init(ctx)) {
-        ERROR("Checksum init failure");
-        goto test_copy_err;
-    }
-    while((tmp = fread(block, sizeof(unsigned char), SX_BS_MEDIUM, file))) {
-        if(!sxi_sha1_update(ctx, block, tmp)) {
-            ERROR("Checksum update failure");
+    switch(check_file_content(local_file_path, hash)) {
+        case -1:
+            ERROR("Checking file content failed");
             goto test_copy_err;
-        }
-        if(tmp < SX_BS_MEDIUM) {
-            ERROR("Only a part of file has been downloaded");
+        case 0: /* Downloaded file is correct */
+            break;
+        case 1:
+            ERROR("Downloaded file differs from the original one");
             goto test_copy_err;
-        }
-    }
-    if(!sxi_sha1_final(ctx, hash2, NULL)) {
-        ERROR("Checksum final calculation failure");
-        goto test_copy_err;
-    }
-    if(memcmp(hash1, hash2, SXI_SHA1_BIN_LEN)) {
-        ERROR("Uploaded and downloaded file differs");
-        goto test_copy_err;
     }
     if(delete_files(sx, cluster, NULL, remote_file1_path, 0)) {
         ERROR("Cannot delete '%s' file", remote_file1_path);
@@ -2308,15 +2256,12 @@ static int test_copy(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local
     PRINT("Succeeded");
     ret = 0;
 test_copy_err:
-    if(file && fclose(file) == EOF)
-        WARNING("Cannot close '%s' file: %s", local_file_path, strerror(errno));
     if(local_file_path && unlink(local_file_path) && errno != ENOENT)
         WARNING("Cannot delete '%s' file: %s", local_file_path, strerror(errno));
     cleanup_volumes(sx, cluster, vdata, sizeof(vdata) / sizeof(*vdata));
     free(local_file_path);
     free(remote_file1_path);
     free(remote_file2_path);
-    sxi_md_cleanup(&ctx);
     sxc_free_uri(uri);
     sxc_file_free(src);
     sxc_file_free(dest);
