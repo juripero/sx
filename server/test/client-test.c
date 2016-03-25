@@ -1574,6 +1574,73 @@ struct vol_data {
     const char *filter_cfg;
 };
 
+static int get_filters (const sxf_handle_t *filters, int fcount, struct vol_data *vdata, int n, int rand_filters, const struct gengetopt_args_info *args) {
+    int i, j, done;
+    uint64_t seed, r;
+    rnd_state_t state;
+    const sxc_filter_t *filter;
+
+    if(rand_filters) { /* Use filters */
+        if(fcount < n) {
+            ERROR("Not enough filters");
+            return -2; /* TODO: is it a failure or not? */
+        } else if(fcount == n) {
+            for(i=0; i<fcount; i++) {
+                filter = sxc_get_filter(&filters[i]);
+                if(!strcmp(filter->uuid, "35a5404d-1513-4009-904c-6ee5b0cd8634")) { /* We have 'n' filters, cannot use one of them, not enough left */
+                    ERROR("Not enough filters");
+                    return -2; /* TODO: is it a failure or not? */
+                }
+            }
+        }
+        seed = make_seed();
+        rnd_seed(&state, seed);
+        for(i=0; i<n; i++) { /* Get the rest of filters */
+            if(vdata[i].filter_name || (!i ? args->use_filter_given : 0)) { /* Use specified filter (the one in the data structure has higher priority) */
+                filter = NULL;
+                for(j=0; j<fcount; j++) {
+                    filter = sxc_get_filter(&filters[j]);
+                    if(!strcmp(filter->shortname, vdata[i].filter_name ? vdata[i].filter_name : args->use_filter_arg))
+                        break;
+                    filter = NULL;
+                }
+                if(!filter) {
+                    ERROR("'%s' filter not found", vdata[i].filter_name ? vdata[i].filter_name : args->use_filter_arg);
+                    return -1;
+                }
+            } else { /* Take random filter */
+                while(1) {
+                    r = rand_2cmres(&state) % (uint64_t)fcount;
+                    filter = sxc_get_filter(&filters[r]);
+                    if(!filter) {
+                        ERROR("Cannot randomize the filter to use");
+                        return -1;
+                    }
+                    done = 1;
+                    if(!strcmp(filter->uuid, "35a5404d-1513-4009-904c-6ee5b0cd8634")) { /* Don't use old aes filter */
+                        done = 0;
+                    } else {
+                        for(j=0; j<i; j++)
+                            if(!strcmp(filter->shortname, vdata[j].filter_name)) {
+                                done = 0;
+                                break;
+                            }
+                    }
+                    if(done)
+                        break;
+                }
+                j = (int)r; /* There should not be more filters than INT_MAX */
+            }
+            vdata[i].filter_name = filter->shortname;
+            vdata[i].filter_cfg = get_filter_cfg(&filters[j]);
+        }
+    } else { /* Do not use filters */
+        for(i=0; i<n; i++)
+            vdata[i].filter_name = vdata[i].filter_cfg = NULL;
+    }
+    return 0;
+} /* get_filters */
+
 /* Prepare volumes for testing */
 static int prepare_volumes(sxc_client_t *sx, sxc_cluster_t *cluster, const sxf_handle_t *filters, int fcount, struct vol_data *vdata, unsigned int count, int human_readable, int hide_errors) {
     int j, ret = -1;
@@ -1870,12 +1937,13 @@ static int test_user_quota(sxc_client_t *sx, sxc_cluster_t *cluster, const char 
     }
 
     vdata[0].owner = udata[0].username;
-/*    vdata[0].filter_name = filter1_name;
-    vdata[0].filter_cfg = filter1_cfg;*/
     vdata[1].owner = udata[0].username;
-/*    vdata[1].filter_name = filter2_name;
-    vdata[1].filter_cfg = filter2_cfg;*/ /* TODO: allow to use filters */
     vdata[0].replica = vdata[1].replica = args->replica_arg;
+    if(get_filters(filters, fcount, vdata, sizeof(vdata)/sizeof(*vdata), rand_filters, args)) {
+        ERROR("Cannot get filters");
+        goto test_user_quota_err;
+    }
+
     /* Create 1 volume owned by user1 */
     if(prepare_volumes(sx, cluster, filters, fcount, vdata, sizeof(vdata) / sizeof(*vdata), args->human_flag, 1)) {
         ERROR("Failed to prepare volumes");
@@ -2091,10 +2159,10 @@ static int check_single_meta(sxc_client_t *sx, sxc_meta_t *fmeta, const char *fi
             return -1;
         }
     } else if(!strcmp(filter_name, "zcomp")) {
-/*        if(sxc_meta_count(fmeta) != 0) {
-            ERROR("%s: Wrong number of entries (%u != 0)", filter_name, sxc_meta_count(fmeta));
+        if(sxc_meta_count(fmeta) != 1) {
+            ERROR("%s: Wrong number of entries (%u != 1)", filter_name, sxc_meta_count(fmeta));
             return -1;
-        }*/ /* FIXME: this must not be commented out */
+        }
     } else {
         ERROR("Unknown filter: %s", filter_name);
         return -1;
@@ -2130,13 +2198,11 @@ check_files_meta_err:
 
 static int test_copy(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, int rand_filters, const sxf_handle_t *filters, int fcount, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, const unsigned int max_revisions, const int check_data_size) {
     int ret = 1, tmp;
-    uint64_t r;
     char *local_file_path = NULL, *remote_file1_path = NULL, *remote_file2_path = NULL;
     unsigned char block[SX_BS_MEDIUM], hash1[SXI_SHA1_BIN_LEN], hash2[SXI_SHA1_BIN_LEN];
     FILE *file = NULL;
     sxc_uri_t *uri = NULL;
     sxc_file_t *src = NULL, *dest = NULL;
-    const sxc_filter_t *filter;
     sxi_md_ctx *ctx = sxi_md_init();
     struct vol_data vdata[2];
 
@@ -2148,64 +2214,11 @@ static int test_copy(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local
     }
     vdata[0].owner = vdata[1].owner = args->owner_arg;
     vdata[0].replica = vdata[1].replica = args->replica_arg;
-    if(rand_filters) {
-        uint64_t seed = make_seed();
-        rnd_state_t state;
-
-        if(fcount < 2) {
-            ERROR("Not enough filters to run this test");
-            return 0; /* TODO: is it a failure or not? */
-        } else if(fcount == 2) {
-            int i = 0;
-            for(; i<fcount; i++) {
-                filter = sxc_get_filter(&filters[i]);
-                if(!strcmp(filter->uuid, "35a5404d-1513-4009-904c-6ee5b0cd8634")) { /* We have 2 filters, cannot use one of them, 1 left */
-                    ERROR("Not enough filters to run this test");
-                    return 0; /* TODO: is it a failure or not? */
-                }
-            }
-        }
-        rnd_seed(&state, seed);
-        if(args->use_filter_given) {
-            int i = 0;
-            filter = NULL;
-            for(; i<fcount; i++) {
-                filter = sxc_get_filter(&filters[i]);
-                if(!strcmp(filter->shortname, args->use_filter_arg))
-                    break;
-                filter = NULL;
-            }
-            if(!filter) {
-                ERROR("'%s' filter not found", args->use_filter_arg);
-                return ret;
-            }
-            vdata[0].filter_name = filter->shortname;
-            vdata[0].filter_cfg = get_filter_cfg(&filters[i]);
-        } else do {
-            r = rand_2cmres(&state) % (uint64_t)fcount;
-            filter = sxc_get_filter(&filters[r]);
-            if(!filter) {
-                ERROR("Cannot randomize the filter to use");
-                return ret;
-            }
-            vdata[0].filter_name = filter->shortname;
-            vdata[0].filter_cfg = get_filter_cfg(&filters[r]);
-        } while(!strcmp(filter->uuid, "35a5404d-1513-4009-904c-6ee5b0cd8634")); /* Skip old aes filter */
-        do {
-            r = rand_2cmres(&state) % (uint64_t)fcount;
-            filter = sxc_get_filter(&filters[r]);
-            if(!filter) {
-                ERROR("Cannot randomize the filter to use");
-                return ret;
-            }
-        } while(!strcmp(filter->uuid, "35a5404d-1513-4009-904c-6ee5b0cd8634") || !strcmp(filter->shortname, vdata[0].filter_name)); /* Skip old aes filter */
-        vdata[1].filter_name = filter->shortname;
-        vdata[1].filter_cfg = get_filter_cfg(&filters[r]);
-        PRINT("Filters: %s (%s) and %s (%s)", vdata[0].filter_name, vdata[0].filter_cfg, vdata[1].filter_name, vdata[1].filter_cfg);
-    } else {
-        vdata[0].filter_name = vdata[0].filter_cfg = vdata[1].filter_name = vdata[1].filter_cfg = NULL;
-        PRINT("No filters");
+    if(get_filters(filters, fcount, vdata, sizeof(vdata)/sizeof(*vdata), rand_filters, args)) {
+        ERROR("Cannot get filters");
+        goto test_copy_err;
     }
+    PRINT("Filters: %s (%s) and %s (%s)", vdata[0].filter_name, vdata[0].filter_cfg, vdata[1].filter_name, vdata[1].filter_cfg);
     if(prepare_volumes(sx, cluster, filters, fcount, vdata, sizeof(vdata) / sizeof(*vdata), args->human_flag, 0)) {
         ERROR("Failed to prepare volumes");
         goto test_copy_err;
@@ -2996,6 +3009,7 @@ client_test_t tests[] = {
     {1, 0, 1, 0, 0, 0, 0, "undelete", test_undelete},
     {0, 0, 0, 0, 0, 0, 0, "volume_meta", test_volmeta},
     {0, 0, 0, 0, 0, 0, 0, "quota:user", test_user_quota},
+/*    {0, 0, 0, 0, 1, 0, 0, "quota:user:filters", test_user_quota},*/ /* TODO: metadata are included in quot */
     {0, 0, 0, 0, 0, 0, 0, "quota:volume", test_volume_quota},
     {0, 0, 0, 0, 0, 0, 0, "copy", test_copy},
     {0, 0, 0, 0, 1, 0, 0, "copy:filters", test_copy},
