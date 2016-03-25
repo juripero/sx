@@ -388,13 +388,17 @@ delete_files_err:
     return ret;
 } /* delete_files */
 
-static int remove_volume(sxc_client_t *sx, sxc_cluster_t *cluster, const char *volname, int wipe, int hide_errors) {
+static int remove_volume(sxc_client_t *sx, sxc_cluster_t *cluster, const char *volname, int hide_errors) {
     int ret = 1;
     char *voldir = NULL;
     const char *confdir;
 
-    if(wipe && delete_files(sx, cluster, volname, "/", hide_errors) && sxc_geterrnum(sx) != SXE_ECOMM) {
+    if(delete_files(sx, cluster, volname, "/", hide_errors) && sxc_geterrnum(sx) != SXE_ECOMM) {
         ERROR("Cannot clear '%s' volume: %s", volname, sxc_geterrmsg(sx));
+        return ret;
+    }
+    if(strstr(volname, "undelete") && delete_files(sx, cluster, volname, "/", hide_errors) && sxc_geterrnum(sx) != SXE_ECOMM) { /* wipe the trash */
+        ERROR("Cannot clear '%s' volume's trash: %s", volname, sxc_geterrmsg(sx));
         return ret;
     }
     if(sxc_volume_remove(cluster, volname)) {
@@ -501,7 +505,6 @@ download_file_err:
 static int find_file(sxc_client_t *sx, sxc_cluster_t *cluster, const char *remote_file_path, int hide_errors) {
     int ret = -1, n;
     sxc_uri_t *uri;
-    sxc_file_list_t *lst = NULL;
     sxc_cluster_lf_t *file_list;
     sxc_file_t *file = NULL;
 
@@ -530,7 +533,6 @@ static int find_file(sxc_client_t *sx, sxc_cluster_t *cluster, const char *remot
 find_file_err:
     sxc_file_free(file);
     sxc_free_uri(uri);
-    sxc_file_list_free(lst);
     sxc_cluster_listfiles_free(file_list);
     return ret;
 } /* find_file */
@@ -1472,26 +1474,7 @@ static int volume_test(sxc_client_t *sx, sxc_cluster_t *cluster, const char *loc
             }
         }
     }
-    if(delete_files(sx, cluster, NULL, remote_dir_path, 0)) {
-        ERROR("Cannot delete files from '%s'", remote_dir_path);
-        goto volume_test_err;
-    }
-    if(f && filter_cfg && !strcmp(f->shortname, "undelete")) {
-        char *trash_path;
-        trash_path = (char*)malloc(strlen(remote_dir_path) + strlen(filter_cfg) + 1 + 1);
-        if(!trash_path) {
-            ERROR("Cannot allocate memory for trash_path");
-            goto volume_test_err;
-        }
-        sprintf(trash_path, "sx://%s%s%s/%s%s/%s/", uri->profile ? uri->profile : "", uri->profile ? "@" : "", uri->host, volname, filter_cfg, REMOTE_DIR);
-        if(delete_files(sx, cluster, NULL, trash_path, 0)) {
-            ERROR("Cannot delete files from '%s'", trash_path);
-            free(trash_path);
-            goto volume_test_err;
-        }
-        free(trash_path);
-    }
-    if(remove_volume(sx, cluster, volname, 0, 0)) {
+    if(remove_volume(sx, cluster, volname, 0)) {
         ERROR("Cannot remove '%s' volume", volname);
         goto volume_test_err;
     }
@@ -1687,7 +1670,7 @@ static void cleanup_volumes(sxc_client_t *sx, sxc_cluster_t *cluster, struct vol
     unsigned int i;
 
     for(i = 0; i < count; i++) {
-        if(*vdata[i].name && remove_volume(sx, cluster, vdata[i].name, 1, 1))
+        if(*vdata[i].name && remove_volume(sx, cluster, vdata[i].name, 1))
             WARNING("Failed to cleanup volume %s: %s", vdata[i].name, sxc_geterrmsg(sx));
     }
 }
@@ -2122,7 +2105,7 @@ static int test_volume_quota(sxc_client_t *sx, sxc_cluster_t *cluster, const cha
     PRINT("Succeeded");
     ret = 0;
 test_quota_err:
-    if(remove_volume(sx, cluster, volname, 1, 1))
+    if(remove_volume(sx, cluster, volname, 1))
         WARNING("Cannot remove '%s' volume", volname);
     if(file && unlink(local_file_path))
         WARNING("Cannot delete '%s' file: %s", local_file_path, strerror(errno));
@@ -2345,10 +2328,12 @@ struct files_transfer {
 };
 
 static int test_paths(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, int rand_filters, const sxf_handle_t *filters, int fcount, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, unsigned int max_revisions, int check_data_size) {
-    int ret = -1;
+    int ret = -1, n;
     unsigned int i;
     char *local_file_path = NULL;
-    sxc_file_t *src = NULL, *dest = NULL;
+    const char *paths[] = {"/file_paths", "/dir", "/dir/"};
+    sxc_file_t *src = NULL, *dest = NULL, *file = NULL;
+    sxc_cluster_lf_t *file_list;
     struct vol_data vdata[2];
     struct files_transfer ftrans[] = {{"fil?_pat?s", ""}, {"f*_*s", "dir/.sxnewdir"}, {"*", "dir"}};
 
@@ -2357,10 +2342,17 @@ static int test_paths(sxc_client_t *sx, sxc_cluster_t *cluster, const char *loca
     vdata[0].filter_name = vdata[0].filter_cfg = vdata[1].filter_name = vdata[1].filter_cfg = NULL;
     vdata[0].owner = vdata[1].owner = args->owner_arg;
     vdata[0].replica = vdata[1].replica = args->replica_arg;
+    if(rand_filters)
+        vdata[1].filter_name = "aes256";
+    if(get_filters(filters, fcount, vdata, sizeof(vdata)/sizeof(*vdata), rand_filters, args)) {
+        ERROR("Cannot get filters");
+        goto test_paths_err;
+    }
     if(prepare_volumes(sx, cluster, filters, fcount, vdata, sizeof(vdata) / sizeof(*vdata), args->human_flag, 0)) {
         ERROR("Failed to prepare volumes");
         goto test_paths_err;
     }
+
     local_file_path = (char*)malloc(strlen(local_dir_path) + strlen("file_paths") + 1); /* no macro for filename to be able to create static array */
     if(!local_file_path) {
         ERROR("Cannot allocate memory for local_file_path");
@@ -2402,6 +2394,42 @@ static int test_paths(sxc_client_t *sx, sxc_cluster_t *cluster, const char *loca
             goto test_paths_err;
         }
     }
+    /* Check file listing */
+    file_list = sxc_cluster_listfiles(cluster, vdata[1].name, "", 0, NULL, 0); /* Not using find_file() - want to use sxc_cluster_listfiles() only once */
+    if(!file_list) {
+        ERROR("Cannot get volume files list: %s", sxc_geterrmsg(sx));
+        goto test_paths_err;
+    }
+    while(1) {
+        sxc_file_free(file);
+        file = NULL;
+        n = sxc_cluster_listfiles_next(cluster, vdata[1].name, file_list, &file);
+        if(!n)
+            break;
+        if(n < 0) {
+            ERROR("%s", sxc_geterrmsg(sx));
+            goto test_paths_err;
+        }
+        if(!file || !sxc_file_get_path(file)) {
+            ERROR("NULL file name pointer received");
+            goto test_paths_err;
+        }
+        PRINT("Checking: %s", sxc_file_get_path(file));
+        for(i=0; i<sizeof(paths)/sizeof(*paths); i++)
+            if(paths[i] && !strcmp(paths[i], sxc_file_get_path(file))) {
+                paths[i] = NULL;
+                break;
+            }
+        if(i == sizeof(paths)/sizeof(*paths)) {
+            ERROR("File not expected: %s", sxc_file_get_path(file));
+            goto test_paths_err;
+        }
+    }
+    for(i=0; i<sizeof(paths)/sizeof(*paths); i++)
+        if(paths[i]) {
+            ERROR("File missing: %s", paths[i]);
+            goto test_paths_err;
+        }
 
     PRINT("Succeeded");
     ret = 0;
@@ -2412,6 +2440,8 @@ test_paths_err:
     free(local_file_path);
     sxc_file_free(src);
     sxc_file_free(dest);
+    sxc_file_free(file);
+    sxc_cluster_listfiles_free(file_list);
     return ret;
 } /* test_paths */
 
@@ -2866,7 +2896,7 @@ static int test_acl(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_
             ERROR("'%s' has diferent rights on '%s'", udata[0].username, vdata[0].name);
             goto test_acl_err;
     }
-    if(remove_volume(sx, cluster, vdata[0].name, 0, 1)) {
+    if(remove_volume(sx, cluster, vdata[0].name, 1)) {
         if(sxc_geterrnum(sx) == SXE_EAUTH)
             PRINT("Volume removal permission enforced correctly");
         else {
@@ -3016,6 +3046,7 @@ client_test_t tests[] = {
     {0, 0, 0, 0, 0, 0, 0, "copy", test_copy},
     {0, 0, 0, 0, 1, 0, 0, "copy:filters", test_copy},
     {0, 0, 0, 0, 0, 0, 0, "paths", test_paths},
+    {0, 0, 0, 0, 1, 0, 0, "paths:filters", test_paths},
     {0, 0, 0, 0, 0, 0, 0, "acl", test_acl},
     {-1, -1, -1, -1, -1, 0, 0, NULL, NULL}
 };
