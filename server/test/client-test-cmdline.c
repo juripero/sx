@@ -34,12 +34,12 @@ const char *gengetopt_args_info_versiontext = "";
 const char *gengetopt_args_info_description = "SX client testing tool.";
 
 const char *gengetopt_args_info_full_help[] = {
-  "      --help               Print help and exit",
+  "  -h, --help               Print help and exit",
   "      --full-help          Print help, including hidden options, and exit",
   "  -V, --version            Print version and exit",
   "  -r, --replica=INT        Set tested volume replica value  (default=`1')",
   "  -o, --owner=USER         Set 'USER' as the volume owner  (default=`admin')",
-  "  -h, --human              Print sizes in human readable format  (default=off)",
+  "  -H, --human              Print sizes in human readable format  (default=off)",
   "  -D, --debug              Enable debug messages  (default=off)",
   "  -a, --all                Run all possible tests  (default=off)",
   "  -l, --list-tests         List available tests  (default=off)",
@@ -557,12 +557,12 @@ cmdline_parser_internal (
       int option_index = 0;
 
       static struct option long_options[] = {
-        { "help",	0, NULL, 0 },
+        { "help",	0, NULL, 'h' },
         { "full-help",	0, NULL, 0 },
         { "version",	0, NULL, 'V' },
         { "replica",	1, NULL, 'r' },
         { "owner",	1, NULL, 'o' },
-        { "human",	0, NULL, 'h' },
+        { "human",	0, NULL, 'H' },
         { "debug",	0, NULL, 'D' },
         { "all",	0, NULL, 'a' },
         { "list-tests",	0, NULL, 'l' },
@@ -573,12 +573,17 @@ cmdline_parser_internal (
         { 0,  0, 0, 0 }
       };
 
-      c = getopt_long (argc, argv, "Vr:o:hDalt:F:c:f:", long_options, &option_index);
+      c = getopt_long (argc, argv, "hVr:o:HDalt:F:c:f:", long_options, &option_index);
 
       if (c == -1) break;	/* Exit from `while (1)' loop.  */
 
       switch (c)
         {
+        case 'h':	/* Print help and exit.  */
+          cmdline_parser_print_help ();
+          cmdline_parser_free (&local_args_info);
+          exit (EXIT_SUCCESS);
+
         case 'V':	/* Print version and exit.  */
         
         
@@ -617,12 +622,12 @@ cmdline_parser_internal (
             goto failure;
         
           break;
-        case 'h':	/* Print sizes in human readable format.  */
+        case 'H':	/* Print sizes in human readable format.  */
         
         
           if (update_arg((void *)&(args_info->human_flag), 0, &(args_info->human_given),
               &(local_args_info.human_given), optarg, 0, 0, ARG_FLAG,
-              check_ambiguity, override, 1, 0, "human", 'h',
+              check_ambiguity, override, 1, 0, "human", 'H',
               additional_error))
             goto failure;
         
@@ -707,12 +712,6 @@ cmdline_parser_internal (
           break;
 
         case 0:	/* Long option with no short option */
-          if (strcmp (long_options[option_index].name, "help") == 0) {
-            cmdline_parser_print_help ();
-            cmdline_parser_free (&local_args_info);
-            exit (EXIT_SUCCESS);
-          }
-
           if (strcmp (long_options[option_index].name, "full-help") == 0) {
             cmdline_parser_print_full_help ();
             cmdline_parser_free (&local_args_info);
