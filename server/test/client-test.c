@@ -501,7 +501,7 @@ static const char* get_filter_cfg (const sxf_handle_t *filter) {
 static int get_filters (const sxf_handle_t *filters, int fcount, struct vol_data *vdata, int n, int rand_filters, const struct gengetopt_args_info *args) {
     int i, j, ret = -1, done;
     uint64_t seed, r;
-    char *use_filter = NULL, *filter_name, *ptr;
+    char *use_filter = NULL, *filter_name = NULL, *ptr = NULL;
     rnd_state_t state;
     const sxc_filter_t *filter;
 
@@ -847,7 +847,7 @@ create_file_err:
     0 - OK
     1 - hashes differ */
 static int check_file_content(const char *path, unsigned char sha_hash[SXI_SHA1_BIN_LEN]) {
-    int ret = -1, fd;
+    int ret = -1, fd = -1;
     char buff[1024];
     unsigned char local_hash[SXI_SHA1_BIN_LEN];
     ssize_t rbytes;
@@ -2331,7 +2331,7 @@ static int test_paths(sxc_client_t *sx, sxc_cluster_t *cluster, const char *loca
     char *local_file_path = NULL;
     const char *paths[] = {"/file_paths", "/dir", "/dir/"};
     sxc_file_t *src = NULL, *dest = NULL, *file = NULL;
-    sxc_cluster_lf_t *file_list;
+    sxc_cluster_lf_t *file_list = NULL;
     struct vol_data vdata[2];
     struct files_transfer ftrans[] = {{"fil?_pat?s", ""}, {"f*_*s", "dir/.sxnewdir"}, {"*", "dir"}};
 
