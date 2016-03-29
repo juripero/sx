@@ -103,22 +103,6 @@ static int run_test(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_
     return test->fun(sx, cluster, local_dir_path, remote_dir_path, profile_name, cluster_name, test->rand_filters, filters, fcount, test->block_size, test->block_count, args, max_revisions, check_data_size);
 }
 
-const char *filters_name[] = {"undelete", "zcomp", "aes256", "attribs", NULL};
-const char *filters_cfg[] = {TRASH_NAME, ZCOMP_LEVEL, NULL, NULL, NULL};
-
-/* Get configuration assigned to the filter */
-static const char* get_filter_cfg (const sxf_handle_t *filter) {
-    int i;
-    const sxc_filter_t *f;
-    if(!filter)
-        return NULL;
-    f = sxc_get_filter(filter);
-    for(i=0; filters_name[i]; i++)
-        if(!strcmp(filters_name[i], f->shortname))
-            return filters_cfg[i];
-    return NULL;
-} /* get_filter_cfg */
-
 int64_t bytes; /* FIXME: small change in libsxclient to avoid this to be global */
 client_test_t tests[];
 
@@ -424,6 +408,211 @@ remove_volume_err:
     free(voldir);
     return ret;
 } /* remove_volume */
+
+struct user_data {
+    char username[SXLIMIT_MAX_USERNAME_LEN+1];
+    int admin;
+    char *key;
+};
+
+static void user_data_free(struct user_data *udata) {
+    if(!udata)
+        return;
+    free(udata->key);
+    udata->key = NULL;
+    *udata->username = '\0';
+}
+
+/* Prepare users for testing */
+static int prepare_users(sxc_client_t *sx, sxc_cluster_t *cluster, struct user_data *udata, unsigned int count) {
+    int ret = -1;
+    unsigned int i;
+    if(!sx || !cluster || !udata || !count) {
+        ERROR("NULL argument");
+        return ret;
+    }
+
+    for(i = 0; i < count; i++) {
+        /* Create first user */
+        sprintf(udata[i].username, "user_XXXXXX");
+        if(randomize_name(udata[i].username))
+            goto prepare_users_err;
+        udata[i].key = sxc_user_add(cluster, udata[i].username, NULL, udata[i].admin, NULL, NULL, 1, 0);
+        if(!udata[i].key) {
+            ERROR("Cannot create '%s' user: %s", udata[i].username, sxc_geterrmsg(sx));
+            goto prepare_users_err;
+        }
+        if(sxc_cluster_add_access(cluster, udata[i].username, udata[i].key)) {
+            ERROR("Failed to add '%s' profile authentication: %s", udata[i].username, sxc_geterrmsg(sx));
+            goto prepare_users_err;
+        }
+    }
+
+    ret = 0;
+prepare_users_err:
+    if(ret) {
+        for(; i < count; i++)
+            user_data_free(&udata[i]);
+    }
+    return ret;
+}
+
+/* Cleanup users created using prepare_users() */
+static void cleanup_users(sxc_client_t *sx, sxc_cluster_t *cluster, struct user_data *udata, unsigned int count) {
+    unsigned int i;
+    if(!sx || !cluster || !udata || !count) {
+        ERROR("NULL argument");
+        return;
+    }
+
+    for(i = 0; i < count; i++) {
+        /* Delete user */
+        if(*udata[i].username && sxc_user_remove(cluster, udata[i].username, 0))
+            WARNING("Failed to cleanup user %s", udata[i].username);
+        user_data_free(&udata[i]);
+    }
+}
+
+struct vol_data {
+    char name[SXLIMIT_MAX_VOLNAME_LEN+1];
+    const char *owner;
+    unsigned int replica;
+    unsigned int revisions;
+    const char *filter_name;
+    const char *filter_cfg;
+};
+
+const char *filters_name[] = {"undelete", "zcomp", "aes256", "attribs", NULL};
+const char *filters_cfg[] = {TRASH_NAME, ZCOMP_LEVEL, NULL, NULL, NULL};
+
+/* Get configuration assigned to the filter */
+static const char* get_filter_cfg (const sxf_handle_t *filter) {
+    int i;
+    const sxc_filter_t *f;
+    if(!filter)
+        return NULL;
+    f = sxc_get_filter(filter);
+    for(i=0; filters_name[i]; i++)
+        if(!strcmp(filters_name[i], f->shortname))
+            return filters_cfg[i];
+    return NULL;
+} /* get_filter_cfg */
+
+static int get_filters (const sxf_handle_t *filters, int fcount, struct vol_data *vdata, int n, int rand_filters, const struct gengetopt_args_info *args) {
+    int i, j, done;
+    uint64_t seed, r;
+    rnd_state_t state;
+    const sxc_filter_t *filter;
+
+    if(rand_filters) { /* Use filters */
+        if(fcount < n) {
+            ERROR("Not enough filters");
+            return -2; /* TODO: is it a failure or not? */
+        } else if(fcount == n) {
+            for(i=0; i<fcount; i++) {
+                filter = sxc_get_filter(&filters[i]);
+                if(!strcmp(filter->uuid, "35a5404d-1513-4009-904c-6ee5b0cd8634")) { /* We have 'n' filters, cannot use one of them, not enough left */
+                    ERROR("Not enough filters");
+                    return -2; /* TODO: is it a failure or not? */
+                }
+            }
+        }
+        seed = make_seed();
+        rnd_seed(&state, seed);
+        for(i=0; i<n; i++) { /* Get the rest of filters */
+            if(vdata[i].filter_name || (!i ? args->use_filter_given : 0)) { /* Use specified filter (the one in the data structure has higher priority) */
+                filter = NULL;
+                for(j=0; j<fcount; j++) {
+                    filter = sxc_get_filter(&filters[j]);
+                    if(!strcmp(filter->shortname, vdata[i].filter_name ? vdata[i].filter_name : args->use_filter_arg))
+                        break;
+                    filter = NULL;
+                }
+                if(!filter) {
+                    ERROR("'%s' filter not found", vdata[i].filter_name ? vdata[i].filter_name : args->use_filter_arg);
+                    return -1;
+                }
+            } else { /* Take random filter */
+                while(1) {
+                    r = rand_2cmres(&state) % (uint64_t)fcount;
+                    filter = sxc_get_filter(&filters[r]);
+                    if(!filter) {
+                        ERROR("Cannot randomize the filter to use");
+                        return -1;
+                    }
+                    done = 1;
+                    if(!strcmp(filter->uuid, "35a5404d-1513-4009-904c-6ee5b0cd8634")) { /* Don't use old aes filter */
+                        done = 0;
+                    } else {
+                        for(j=0; j<i; j++)
+                            if(!strcmp(filter->shortname, vdata[j].filter_name)) {
+                                done = 0;
+                                break;
+                            }
+                    }
+                    if(done)
+                        break;
+                }
+                j = (int)r; /* There should not be more filters than INT_MAX */
+            }
+            vdata[i].filter_name = filter->shortname;
+            vdata[i].filter_cfg = get_filter_cfg(&filters[j]);
+        }
+    } else { /* Do not use filters */
+        for(i=0; i<n; i++)
+            vdata[i].filter_name = vdata[i].filter_cfg = NULL;
+    }
+    return 0;
+} /* get_filters */
+
+/* Prepare volumes for testing */
+static int prepare_volumes(sxc_client_t *sx, sxc_cluster_t *cluster, const sxf_handle_t *filters, int fcount, struct vol_data *vdata, unsigned int count, int human_readable, int hide_errors) {
+    int j, ret = -1;
+    unsigned int i;
+
+    if(!sx || !cluster || !vdata || !count) {
+        ERROR("NULL argument");
+        return ret;
+    }
+
+    for(i = 0; i < count; i++) {
+        snprintf(vdata[i].name, sizeof(vdata[i].name), "%s%u_%s_XXXXXX", VOLNAME, i + 1, vdata[i].filter_name ? vdata[i].filter_name : "NonFilter");
+        if(randomize_name(vdata[i].name))
+            goto prepare_volumes_err;
+        j = fcount;
+        if(vdata[i].filter_name) {
+            for(j=0; j<fcount; j++) {
+                const sxc_filter_t *f = sxc_get_filter(&filters[j]);
+                if(!strcmp(vdata[i].filter_name, f->shortname))
+                    break;
+            }
+            if(j == fcount) {
+                ERROR("'%s' filter not loaded", vdata[i].filter_name);
+                goto prepare_volumes_err;
+            }
+        }
+        if(create_volume(sx, cluster, vdata[i].name, vdata[i].owner ? vdata[i].owner : "admin", j == fcount ? NULL : &filters[j], vdata[i].filter_cfg, vdata[i].replica ? vdata[i].replica : 1, vdata[i].revisions ? vdata[i].revisions : 1, human_readable, hide_errors))
+            goto prepare_volumes_err;
+    }
+
+    ret = 0;
+prepare_volumes_err:
+    if(ret) {
+        for(; i < count; i++)
+            *vdata[i].name = '\0';
+    }
+    return ret;
+}
+
+/* Cleanup volumes created with prepare_volumes() */
+static void cleanup_volumes(sxc_client_t *sx, sxc_cluster_t *cluster, struct vol_data *vdata, unsigned int count) {
+    unsigned int i;
+
+    for(i = 0; i < count; i++) {
+        if(*vdata[i].name && remove_volume(sx, cluster, vdata[i].name, 1))
+            WARNING("Failed to cleanup volume %s: %s", vdata[i].name, sxc_geterrmsg(sx));
+    }
+}
 
 static int upload_file(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_path, const char *remote_path, int hide_errors) {
     int ret = 1;
@@ -1451,195 +1640,6 @@ volume_test_err:
     free(remote_dir_path);
     return ret;
 } /* volume_test */
-
-struct user_data {
-    char username[SXLIMIT_MAX_USERNAME_LEN+1];
-    int admin;
-    char *key;
-};
-
-static void user_data_free(struct user_data *udata) {
-    if(!udata)
-        return;
-    free(udata->key);
-    udata->key = NULL;
-    *udata->username = '\0';
-}
-
-/* Prepare users for testing */
-static int prepare_users(sxc_client_t *sx, sxc_cluster_t *cluster, struct user_data *udata, unsigned int count) {
-    int ret = -1;
-    unsigned int i;
-    if(!sx || !cluster || !udata || !count) {
-        ERROR("NULL argument");
-        return ret;
-    }
-
-    for(i = 0; i < count; i++) {
-        /* Create first user */
-        sprintf(udata[i].username, "user_XXXXXX");
-        if(randomize_name(udata[i].username))
-            goto prepare_users_err;
-        udata[i].key = sxc_user_add(cluster, udata[i].username, NULL, udata[i].admin, NULL, NULL, 1, 0);
-        if(!udata[i].key) {
-            ERROR("Cannot create '%s' user: %s", udata[i].username, sxc_geterrmsg(sx));
-            goto prepare_users_err;
-        }
-        if(sxc_cluster_add_access(cluster, udata[i].username, udata[i].key)) {
-            ERROR("Failed to add '%s' profile authentication: %s", udata[i].username, sxc_geterrmsg(sx));
-            goto prepare_users_err;
-        }
-    }
-
-    ret = 0;
-prepare_users_err:
-    if(ret) {
-        for(; i < count; i++)
-            user_data_free(&udata[i]);
-    }
-    return ret;
-}
-
-/* Cleanup users created using prepare_users() */
-static void cleanup_users(sxc_client_t *sx, sxc_cluster_t *cluster, struct user_data *udata, unsigned int count) {
-    unsigned int i;
-    if(!sx || !cluster || !udata || !count) {
-        ERROR("NULL argument");
-        return;
-    }
-
-    for(i = 0; i < count; i++) {
-        /* Delete user */
-        if(*udata[i].username && sxc_user_remove(cluster, udata[i].username, 0))
-            WARNING("Failed to cleanup user %s", udata[i].username);
-        user_data_free(&udata[i]);
-    }
-}
-
-struct vol_data {
-    char name[SXLIMIT_MAX_VOLNAME_LEN+1];
-    const char *owner;
-    unsigned int replica;
-    unsigned int revisions;
-    const char *filter_name;
-    const char *filter_cfg;
-};
-
-static int get_filters (const sxf_handle_t *filters, int fcount, struct vol_data *vdata, int n, int rand_filters, const struct gengetopt_args_info *args) {
-    int i, j, done;
-    uint64_t seed, r;
-    rnd_state_t state;
-    const sxc_filter_t *filter;
-
-    if(rand_filters) { /* Use filters */
-        if(fcount < n) {
-            ERROR("Not enough filters");
-            return -2; /* TODO: is it a failure or not? */
-        } else if(fcount == n) {
-            for(i=0; i<fcount; i++) {
-                filter = sxc_get_filter(&filters[i]);
-                if(!strcmp(filter->uuid, "35a5404d-1513-4009-904c-6ee5b0cd8634")) { /* We have 'n' filters, cannot use one of them, not enough left */
-                    ERROR("Not enough filters");
-                    return -2; /* TODO: is it a failure or not? */
-                }
-            }
-        }
-        seed = make_seed();
-        rnd_seed(&state, seed);
-        for(i=0; i<n; i++) { /* Get the rest of filters */
-            if(vdata[i].filter_name || (!i ? args->use_filter_given : 0)) { /* Use specified filter (the one in the data structure has higher priority) */
-                filter = NULL;
-                for(j=0; j<fcount; j++) {
-                    filter = sxc_get_filter(&filters[j]);
-                    if(!strcmp(filter->shortname, vdata[i].filter_name ? vdata[i].filter_name : args->use_filter_arg))
-                        break;
-                    filter = NULL;
-                }
-                if(!filter) {
-                    ERROR("'%s' filter not found", vdata[i].filter_name ? vdata[i].filter_name : args->use_filter_arg);
-                    return -1;
-                }
-            } else { /* Take random filter */
-                while(1) {
-                    r = rand_2cmres(&state) % (uint64_t)fcount;
-                    filter = sxc_get_filter(&filters[r]);
-                    if(!filter) {
-                        ERROR("Cannot randomize the filter to use");
-                        return -1;
-                    }
-                    done = 1;
-                    if(!strcmp(filter->uuid, "35a5404d-1513-4009-904c-6ee5b0cd8634")) { /* Don't use old aes filter */
-                        done = 0;
-                    } else {
-                        for(j=0; j<i; j++)
-                            if(!strcmp(filter->shortname, vdata[j].filter_name)) {
-                                done = 0;
-                                break;
-                            }
-                    }
-                    if(done)
-                        break;
-                }
-                j = (int)r; /* There should not be more filters than INT_MAX */
-            }
-            vdata[i].filter_name = filter->shortname;
-            vdata[i].filter_cfg = get_filter_cfg(&filters[j]);
-        }
-    } else { /* Do not use filters */
-        for(i=0; i<n; i++)
-            vdata[i].filter_name = vdata[i].filter_cfg = NULL;
-    }
-    return 0;
-} /* get_filters */
-
-/* Prepare volumes for testing */
-static int prepare_volumes(sxc_client_t *sx, sxc_cluster_t *cluster, const sxf_handle_t *filters, int fcount, struct vol_data *vdata, unsigned int count, int human_readable, int hide_errors) {
-    int j, ret = -1;
-    unsigned int i;
-
-    if(!sx || !cluster || !vdata || !count) {
-        ERROR("NULL argument");
-        return ret;
-    }
-
-    for(i = 0; i < count; i++) {
-        snprintf(vdata[i].name, sizeof(vdata[i].name), "%s%u_%s_XXXXXX", VOLNAME, i + 1, vdata[i].filter_name ? vdata[i].filter_name : "NonFilter");
-        if(randomize_name(vdata[i].name))
-            goto prepare_volumes_err;
-        j = fcount;
-        if(vdata[i].filter_name) {
-            for(j=0; j<fcount; j++) {
-                const sxc_filter_t *f = sxc_get_filter(&filters[j]);
-                if(!strcmp(vdata[i].filter_name, f->shortname))
-                    break;
-            }
-            if(j == fcount) {
-                ERROR("'%s' filter not loaded", vdata[i].filter_name);
-                goto prepare_volumes_err;
-            }
-        }
-        if(create_volume(sx, cluster, vdata[i].name, vdata[i].owner ? vdata[i].owner : "admin", j == fcount ? NULL : &filters[j], vdata[i].filter_cfg, vdata[i].replica ? vdata[i].replica : 1, vdata[i].revisions ? vdata[i].revisions : 1, human_readable, hide_errors))
-            goto prepare_volumes_err;
-    }
-
-    ret = 0;
-prepare_volumes_err:
-    if(ret) {
-        for(; i < count; i++)
-            *vdata[i].name = '\0';
-    }
-    return ret;
-}
-
-/* Cleanup volumes created with prepare_volumes() */
-static void cleanup_volumes(sxc_client_t *sx, sxc_cluster_t *cluster, struct vol_data *vdata, unsigned int count) {
-    unsigned int i;
-
-    for(i = 0; i < count; i++) {
-        if(*vdata[i].name && remove_volume(sx, cluster, vdata[i].name, 1))
-            WARNING("Failed to cleanup volume %s: %s", vdata[i].name, sxc_geterrmsg(sx));
-    }
-}
 
 /* Compare meta data, return 0 if they are the same, 1 if different, -1 on error */
 static int cmp_meta(sxc_client_t *sx, sxc_meta_t *a, sxc_meta_t *b, int hide_errors) {
