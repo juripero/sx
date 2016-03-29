@@ -34,19 +34,19 @@ const char *gengetopt_args_info_versiontext = "";
 const char *gengetopt_args_info_description = "SX client testing tool.";
 
 const char *gengetopt_args_info_full_help[] = {
-  "  -h, --help               Print help and exit",
-  "      --full-help          Print help, including hidden options, and exit",
-  "  -V, --version            Print version and exit",
-  "  -r, --replica=INT        Set tested volume replica value  (default=`1')",
-  "  -o, --owner=USER         Set 'USER' as the volume owner  (default=`admin')",
-  "  -H, --human              Print sizes in human readable format  (default=off)",
-  "  -D, --debug              Enable debug messages  (default=off)",
-  "  -a, --all                Run all possible tests  (default=off)",
-  "  -l, --list-tests         List available tests  (default=off)",
-  "  -t, --run-test=TESTNAME  Only run a specific test",
-  "  -F, --use-filter=FILTER  Use this filter to run in some tests",
-  "  -c, --config-dir=PATH    Path to SX configuration directory",
-  "  -f, --filter-dir=PATH    Path to SX filter directory",
+  "  -h, --help                    Print help and exit",
+  "      --full-help               Print help, including hidden options, and exit",
+  "  -V, --version                 Print version and exit",
+  "  -r, --replica=INT             Set tested volume replica value  (default=`1')",
+  "  -o, --owner=USER              Set 'USER' as the volume owner\n                                  (default=`admin')",
+  "  -H, --human                   Print sizes in human readable format\n                                  (default=off)",
+  "  -D, --debug                   Enable debug messages  (default=off)",
+  "  -a, --all                     Run all possible tests  (default=off)",
+  "  -l, --list-tests              List available tests  (default=off)",
+  "  -t, --run-test=TESTNAME       Only run a specific test",
+  "  -F, --use-filter=FILTER[:FILTER]\n                                Use this filter to run in some tests",
+  "  -c, --config-dir=PATH         Path to SX configuration directory",
+  "  -f, --filter-dir=PATH         Path to SX filter directory",
     0
 };
 

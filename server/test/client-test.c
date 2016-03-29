@@ -499,8 +499,9 @@ static const char* get_filter_cfg (const sxf_handle_t *filter) {
 } /* get_filter_cfg */
 
 static int get_filters (const sxf_handle_t *filters, int fcount, struct vol_data *vdata, int n, int rand_filters, const struct gengetopt_args_info *args) {
-    int i, j, done;
+    int i, j, ret = -1, done;
     uint64_t seed, r;
+    char *use_filter = NULL, *filter_name, *ptr;
     rnd_state_t state;
     const sxc_filter_t *filter;
 
@@ -519,18 +520,36 @@ static int get_filters (const sxf_handle_t *filters, int fcount, struct vol_data
         }
         seed = make_seed();
         rnd_seed(&state, seed);
-        for(i=0; i<n; i++) { /* Get the rest of filters */
-            if(vdata[i].filter_name || (!i ? args->use_filter_given : 0)) { /* Use specified filter (the one in the data structure has higher priority) */
+        if(args->use_filter_given) {
+            use_filter = strdup(args->use_filter_arg);
+            if(!use_filter) {
+                ERROR("Out of memory");
+                return ret;
+            }
+            ptr = use_filter;
+        }
+        for(i=0; i<n; i++) {
+            if(ptr) {
+                filter_name = ptr;
+                ptr = strchr(filter_name, ':');
+                if(ptr) {
+                    *ptr = '\0';
+                    ptr++;
+                    if(!*ptr)
+                        ptr = NULL;
+                }
+            }
+            if(vdata[i].filter_name || filter_name) { /* Use specified filter (the one in the data structure has higher priority) */
                 filter = NULL;
                 for(j=0; j<fcount; j++) {
                     filter = sxc_get_filter(&filters[j]);
-                    if(!strcmp(filter->shortname, vdata[i].filter_name ? vdata[i].filter_name : args->use_filter_arg))
+                    if(!strcmp(filter->shortname, vdata[i].filter_name ? vdata[i].filter_name : filter_name))
                         break;
                     filter = NULL;
                 }
                 if(!filter) {
-                    ERROR("'%s' filter not found", vdata[i].filter_name ? vdata[i].filter_name : args->use_filter_arg);
-                    return -1;
+                    ERROR("'%s' filter not found", vdata[i].filter_name ? vdata[i].filter_name : filter_name);
+                    goto get_filters_err;
                 }
             } else { /* Take random filter */
                 while(1) {
@@ -538,7 +557,7 @@ static int get_filters (const sxf_handle_t *filters, int fcount, struct vol_data
                     filter = sxc_get_filter(&filters[r]);
                     if(!filter) {
                         ERROR("Cannot randomize the filter to use");
-                        return -1;
+                        goto get_filters_err;
                     }
                     done = 1;
                     if(!strcmp(filter->uuid, "35a5404d-1513-4009-904c-6ee5b0cd8634")) { /* Don't use old aes filter */
@@ -562,7 +581,11 @@ static int get_filters (const sxf_handle_t *filters, int fcount, struct vol_data
         for(i=0; i<n; i++)
             vdata[i].filter_name = vdata[i].filter_cfg = NULL;
     }
-    return 0;
+
+    ret = 0;
+get_filters_err:
+    free(use_filter);
+    return ret;
 } /* get_filters */
 
 /* Prepare volumes for testing */
