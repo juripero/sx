@@ -968,6 +968,15 @@ static int test_empty_file(sxc_client_t *sx, sxc_cluster_t *cluster, const char 
         ERROR("Cannot upload '%s' file", local_file_path);
         goto test_empty_file_err;
     }
+    switch(find_file(sx, cluster, remote_file_path, 0)) {
+        case -1:
+            ERROR("Looking for '%s' file failed", remote_file_path);
+            goto test_empty_file_err;
+        case 0:
+            ERROR("'%s' file has not been uploaded correctly", REV_FILE_NAME);
+            goto test_empty_file_err;
+        case 1: break;
+    }
 
     ret = 0;
     PRINT("Succeeded");
@@ -1122,7 +1131,7 @@ static int test_revision(sxc_client_t *sx, sxc_cluster_t *cluster, const char *l
 
     vdata.owner = args->owner_arg;
     vdata.replica = args->replica_arg;
-    if(get_filters(filters, fcount, &vdata, 1, 1/*rand_filters*/, args)) { /* we always want to use filters here */
+    if(get_filters(filters, fcount, &vdata, 1, rand_filters, args)) {
         ERROR("Cannot get filter");
         goto test_revision_err;
     }
