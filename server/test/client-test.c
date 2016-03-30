@@ -1669,7 +1669,7 @@ static int test_undelete(sxc_client_t *sx, sxc_cluster_t *cluster, const char *l
     sprintf(remote_file_path, "sx://%s%s%s/%s%s/%s/%s", uri->profile ? uri->profile : "", uri->profile ? "@" : "", uri->host, uri->volume, TRASH_NAME, REMOTE_DIR, UNDELETE_FILE_NAME);
     switch(find_file(sx, cluster, remote_file_path, 0)) {
         case -1:
-            ERROR("Looking for '%s' file in %s failed", remote_file_path, remote_file_path);
+            ERROR("Looking for '%s' file failed", remote_file_path);
             goto test_undelete_err;
         case 0:
             ERROR("'%s' file has not been deleted correctly", remote_file_path);
@@ -1685,6 +1685,76 @@ test_undelete_err:
     free(local_file_path);
     free(remote_file_path);
     sxc_free_uri(uri);
+    return ret;
+} /* test_undelete */
+
+static int test_undelete_vol(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, const char *vol_filter, int rand_filters, const sxf_handle_t *filters, int fcount, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, unsigned int max_revisions, int check_data_size) {
+    int ret = 1;
+    char *local_file_path = NULL, *remote_dir = NULL, *remote_file_path = NULL;
+    struct vol_data vdata[2];
+    char filter_cfg[sizeof(vdata[0].name) + 1 + lenof(TRASH_NAME) + 1];
+
+    PRINT("Started");
+    memset(vdata, 0, sizeof(vdata));
+    vdata[0].owner = vdata[1].owner = args->owner_arg;
+    vdata[0].replica = vdata[1].replica = args->replica_arg;
+    vdata[1].filter_name = "undelete";
+    if(get_filters(filters, fcount, vdata, 1, rand_filters, args)) {
+        ERROR("Cannot get filter");
+        return ret;
+    }
+    if(prepare_volumes(sx, cluster, filters, fcount, vdata, 1, args->human_flag, 1)) { /* create first volume to have its name */
+        ERROR("Failed to prepare first volume");
+        return ret;
+    }
+    sprintf(filter_cfg, "%s:%s", vdata[0].name, TRASH_NAME);
+    vdata[1].filter_cfg = (const char*)filter_cfg;
+    if(prepare_volumes(sx, cluster, filters, fcount, &vdata[1], 1, args->human_flag, 1)) {
+        ERROR("Failed to prepare second volume");
+        goto test_undelete_vol_err;
+    }
+    local_file_path = (char*)malloc(strlen(local_dir_path) + strlen(UNDELETE_FILE_NAME) + 1);
+    if(!local_file_path) {
+        ERROR("Cannot allocate memory for local_file_path");
+        goto test_undelete_vol_err;
+    }
+    sprintf(local_file_path, "%s%s", local_dir_path, UNDELETE_FILE_NAME);
+    remote_file_path = (char*)malloc(lenof("sx://") + (profile_name ? strlen(profile_name) + 1 : 0) + strlen(cluster_name) + 1 + strlen(vdata[0].name) + strlen(vdata[1].name) + 1 + strlen(TRASH_NAME) + 1 + strlen(UNDELETE_FILE_NAME) + 1);
+    if(!remote_file_path) {
+        ERROR("Cannot allocate memory for remote_file_path");
+        goto test_undelete_vol_err;
+    }
+    sprintf(remote_file_path, "sx://%s%s%s/%s/%s/%s", profile_name ? profile_name : "", profile_name ? "@" : "", cluster_name, vdata[1].name, REMOTE_DIR, UNDELETE_FILE_NAME);
+    if(create_file(local_file_path, 0, 0, NULL, 1, NULL))
+        goto test_undelete_vol_err;
+    if(upload_file(sx, cluster, local_file_path, remote_file_path, 0)) {
+        ERROR("Cannot upload '%s' file", local_file_path);
+        goto test_undelete_vol_err;
+    }
+    if(delete_files(sx, cluster, NULL, remote_file_path, 0)) {
+        ERROR("Cannot delete '%s' file", remote_file_path);
+        goto test_undelete_vol_err;
+    }
+    sprintf(remote_file_path, "sx://%s%s%s/%s%s/%s/%s", profile_name ? profile_name : "", profile_name ? "@" : "", cluster_name, vdata[0].name, TRASH_NAME, REMOTE_DIR, UNDELETE_FILE_NAME);
+    switch(find_file(sx, cluster, remote_file_path, 0)) {
+        case -1:
+            ERROR("Looking for '%s' file failed", remote_file_path);
+            goto test_undelete_vol_err;
+        case 0:
+            ERROR("'%s' file has not been deleted correctly", remote_file_path);
+            goto test_undelete_vol_err;
+        case 1: break;
+    }
+
+    PRINT("Succeeded");
+    ret = 0;
+test_undelete_vol_err:
+    if(local_file_path && unlink(local_file_path) && errno != ENOENT)
+        WARNING("Cannot delete '%s' file: %s", local_file_path, strerror(errno));
+    cleanup_volumes(sx, cluster, vdata, sizeof(vdata)/sizeof(*vdata));
+    free(local_file_path);
+    free(remote_dir);
+    free(remote_file_path);
     return ret;
 } /* test_undelete */
 
@@ -3037,6 +3107,7 @@ client_test_t tests[] = {
     {1, 1, 0, 0, 0, 0, 0, "errors", test_errors},
     {1, 0, 1, 0, 0, 0, 0, "attribs", test_attribs},
     {1, 0, 1, 0, 0, 0, 0, "undelete", test_undelete},
+    {0, 0, 1, 0, 0, 0, 0, "undelete:volume", test_undelete_vol},
     {0, 0, 0, 0, 0, 0, 0, "volume_meta", test_volmeta},
     {0, 0, 0, 0, 0, 0, 0, "quota:user", test_user_quota},
 /*    {0, 0, 0, 0, 1, 0, 0, "quota:user:filters", test_user_quota},*/ /* TODO: metadata are included in quot */
