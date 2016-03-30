@@ -948,14 +948,8 @@ check_filemeta_err:
 static int test_empty_file(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, const char *vol_filter, int rand_filters, const sxf_handle_t *filters, int fcount, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, unsigned int max_revisions, int check_data_size) {
     int ret = 1;
     char *local_file_path, *remote_file_path = NULL;
-    sxc_uri_t *uri;
 
     PRINT("Started");
-    uri = sxc_parse_uri(sx, remote_dir_path);
-    if(!uri) {
-        ERROR("%s", sxc_geterrmsg(sx));
-        return ret;
-    }
     local_file_path = (char*)malloc(strlen(local_dir_path) + strlen(EMPTY_FILE_NAME) + 1);
     if(!local_file_path) {
         ERROR("Cannot allocate memory for local_file_path");
@@ -982,7 +976,6 @@ test_empty_file_err:
         WARNING("Cannot delete '%s' file: %s", local_file_path, strerror(errno));
     free(remote_file_path);
     free(local_file_path);
-    sxc_free_uri(uri);
     return ret;
 } /* test_empty_file */
 
