@@ -14331,7 +14331,7 @@ static const char *locknames[] = {
     "CLUSTER_SETTINGS", /* JOBTYPE_CLUSTER_SETTINGS */
     NULL, /* JOBTYPE_JUNLOCKALL */
     NULL, /* JOBTYPE_DELAY */
-    NULL, /* JOBTYPE_UPGRADE_FROM_2_1_3_TO_2_1_4*/
+    "UPGRADE", /* JOBTYPE_UPGRADE_FROM_2_1_3_TO_2_1_4*/
     NULL, /* JOBTYPE_VOLREP_CHANGE */
     NULL, /* JOBTYPE_VOLREP_BLOCKS */
     NULL, /* JOBTYPE_VOLREP_FILES */
@@ -16375,20 +16375,27 @@ static rc_ty fill_block_meta(sx_hashfs_t *h, sqlite3_stmt *qmeta, block_meta_t *
     blockmeta->count = 0;
     sqlite3_reset(qmeta);
     while ((ret = qstep(qmeta)) == SQLITE_ROW) {
-        int op = sqlite3_column_int(qmeta, 1);
+        const void *revision_id, *global_vol_id;
+        int len, op = sqlite3_column_int(qmeta, 1);
         if (op <= 0)
             continue;
         blockmeta->entries = wrap_realloc_or_free(blockmeta->entries, ++blockmeta->count * sizeof(*blockmeta->entries));
         if (!blockmeta->entries)
             return ENOMEM;
         block_meta_entry_t *e = &blockmeta->entries[blockmeta->count - 1];
-        int len = sqlite3_column_bytes(qmeta, 2);
-        if (len != sizeof(e->revision_id.b)) {
-            WARN("bad revision size: %d", len);
+        revision_id = sqlite3_column_blob(qmeta, 2);
+        len = sqlite3_column_bytes(qmeta, 2);
+        if(!revision_id || len != sizeof(e->revision_id.b)) {
+            WARN("bad revision id: %p (size: %d)", revision_id, len);
             return FAIL_EINTERNAL;
         }
-        memcpy(&e->revision_id.b, sqlite3_column_blob(qmeta, 2), len);
-        memcpy(&e->global_vol_id.b, sqlite3_column_blob(qmeta, 3), len);
+        memcpy(e->revision_id.b, revision_id, len);
+        global_vol_id = sqlite3_column_blob(qmeta, 3);
+        len = sqlite3_column_bytes(qmeta, 3);
+        if(!global_vol_id || len != sizeof(e->global_vol_id.b))
+            memset(e->global_vol_id.b, 0, sizeof(e->global_vol_id.b));
+        else
+            memcpy(e->global_vol_id.b, global_vol_id, len);
         e->replica = sqlite3_column_int(qmeta, 0);
         DEBUG("set replica to %d", e->replica);
     }
