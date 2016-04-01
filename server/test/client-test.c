@@ -58,6 +58,7 @@
 #define ATTRIBS_FILE_NAME "file_attrib"
 #define TRASH_NAME "/.Trash"
 #define ZCOMP_LEVEL "level:1"
+#define RENAME_FILE_NAME "file_rename"
 #define UNDELETE_FILE_NAME "file_undelete"
 #define QUOTA_FILE_NAME "file_quota"
 #define QUOTA_VOL_SIZE 1
@@ -1382,6 +1383,116 @@ test_cat_err:
     sxc_file_free(src);
     return ret;
 } /* test_cat */
+
+static int test_rename(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, const char *vol_filter, int rand_filters, const sxf_handle_t *filters, int fcount, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, unsigned int max_revisions, int check_data_size) {
+    int ret = 1, retval;
+    char *local_file_path, *remote_file_path;
+    sxc_uri_t *uri = NULL;
+    sxc_file_t *src = NULL, *dest = NULL;
+
+    PRINT("Started");
+    local_file_path = (char*)malloc(strlen(local_dir_path) + lenof(RENAME_FILE_NAME) + 1);
+    if(!local_file_path) {
+        ERROR("Cannot allocate memory for local_file_path");
+        return ret;
+    }
+    sprintf(local_file_path, "%s%s", local_dir_path, RENAME_FILE_NAME);
+    remote_file_path = (char*)malloc(strlen(remote_dir_path) + lenof(RENAME_FILE_NAME) + lenof("_new") + 1);
+    if(!remote_file_path) {
+        ERROR("Cannot allocate memory for remote_file_path");
+        goto test_rename_err;
+    }
+    sprintf(remote_file_path, "%s%s", remote_dir_path, RENAME_FILE_NAME);
+    if(create_file(local_file_path, 0, 0, NULL, 1, NULL))
+        goto test_rename_err;
+    if(upload_file(sx, cluster, local_file_path, remote_dir_path, 0)) {
+        ERROR("Cannot upload '%s' file", local_file_path);
+        goto test_rename_err;
+    }
+    uri = sxc_parse_uri(sx, remote_file_path);
+    if(!uri) {
+        ERROR("%s", sxc_geterrmsg(sx));
+        goto test_rename_err;
+    }
+    src = sxc_file_remote(cluster, uri->volume, uri->path, NULL);
+    if(!src) {
+        ERROR("Cannot open '%s' file: %s", remote_file_path, sxc_geterrmsg(sx));
+        goto test_rename_err;
+    }
+    sprintf(remote_file_path, "%s%s_new", remote_dir_path, RENAME_FILE_NAME);
+    sxc_free_uri(uri);
+    uri = sxc_parse_uri(sx, remote_file_path);
+    if(!uri) {
+        ERROR("%s", sxc_geterrmsg(sx));
+        goto test_rename_err;
+    }
+    dest = sxc_file_remote(cluster, uri->volume, uri->path, NULL);
+    if(!dest) {
+        ERROR("Cannot open '%s' file: %s", remote_file_path, sxc_geterrmsg(sx));
+        goto test_rename_err;
+    }
+    if((retval = sxc_mass_rename(cluster, src, dest, 0))) {
+        if(!strcmp(vol_filter, "aes256") && retval == -2) {
+            PRINT("Mass rename filename processing error enforced correctly");
+        } else {
+            ERROR("Mass rename failed: %s", sxc_geterrmsg(sx));
+            goto test_rename_err;
+        }
+    }
+    if(retval == 0) {
+        switch(find_file(sx, cluster, remote_file_path, 0)) {
+            case -1:
+                ERROR("Looking for '%s' file failed", remote_file_path);
+                goto test_rename_err;
+            case 0:
+                ERROR("'%s' file has not been renamed correctly", remote_file_path);
+                goto test_rename_err;
+            case 1: break;
+        }
+        sprintf(remote_file_path, "%s%s", remote_dir_path, RENAME_FILE_NAME);
+        switch(find_file(sx, cluster, remote_file_path, 0)) {
+            case -1:
+                ERROR("Looking for '%s' file failed", remote_file_path);
+                goto test_rename_err;
+            case 0: break;
+            case 1:
+                ERROR("'%s' file has not been renamed correctly", remote_file_path);
+                goto test_rename_err;
+        }
+    } else {
+        switch(find_file(sx, cluster, remote_file_path, 0)) {
+            case -1:
+                ERROR("Looking for '%s' file failed", remote_file_path);
+                goto test_rename_err;
+            case 0: break;
+            case 1:
+                ERROR("'%s' file should not be renamed", remote_file_path);
+                goto test_rename_err;
+        }
+        sprintf(remote_file_path, "%s%s", remote_dir_path, RENAME_FILE_NAME);
+        switch(find_file(sx, cluster, remote_file_path, 0)) {
+            case -1:
+                ERROR("Looking for '%s' file failed", remote_file_path);
+                goto test_rename_err;
+            case 0:
+                ERROR("'%s' file should not be renamed", remote_file_path);
+                goto test_rename_err;
+            case 1: break;
+        }
+    }
+    PRINT("Succeeded");
+
+    ret = 0;
+test_rename_err:
+    if(local_file_path && unlink(local_file_path) && errno != ENOENT)
+        ERROR("Cannot remove '%s' file: %s", local_file_path, strerror(errno));
+    free(local_file_path);
+    free(remote_file_path);
+    sxc_free_uri(uri);
+    sxc_file_free(src);
+    sxc_file_free(dest);
+    return ret;
+} /* test_rename */
 
 static int test_errors(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, const char *vol_filter, int rand_filters, const sxf_handle_t *filters, int fcount, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, unsigned int max_revisions, int check_data_size) {
     int ret = 1;
@@ -3106,6 +3217,7 @@ client_test_t tests[] = {
     {1, 1, 0, 0, 0, SX_BS_MEDIUM, 649, "revision:medium", test_revision},
     {1, 1, 0, 1, 0, SX_BS_LARGE, 131, "revision:large", test_revision},
     {1, 1, 0, 0, 0, 0, 0, "cat", test_cat},
+    {1, 0, 0, 0, 1, 0, 0, "rename", test_rename},
     {1, 1, 0, 0, 0, 0, 0, "errors", test_errors},
     {1, 0, 1, 0, 0, 0, 0, "attribs", test_attribs},
     {1, 0, 1, 0, 0, 0, 0, "undelete", test_undelete},
