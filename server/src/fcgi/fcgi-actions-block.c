@@ -239,11 +239,6 @@ struct inuse_ctx {
     blocks_t all;
 };
 
-/*
- * BOB: Maybe we could skip the replica argument if we provide the volume ID, since replica seems to
- *      depend on the volume replica.
- */
-
 /* Example:
    {"BLOCKHASH":{"BLOCKSIZE":[ {"GLOBAL_VOL_ID|REVISION_HASH": REPLICA_COUNT, ...}, ...]}, ...}
 {
