@@ -1072,7 +1072,6 @@ static int test_revision(sxc_client_t *sx, sxc_cluster_t *cluster, const char *l
     int ret = 1;
     char *local_file_path = NULL, *remote_file_path = NULL;
     unsigned char *block, **hashes = NULL;
-    FILE *file = NULL;
     sxc_uri_t *uri = NULL;
     sxc_file_t *src = NULL, *dest = NULL, *dest2 = NULL, *dest3 = NULL;
     sxc_revlist_t *revs = NULL;
@@ -1153,7 +1152,6 @@ static int test_revision(sxc_client_t *sx, sxc_cluster_t *cluster, const char *l
             ERROR("Cannot delete '%s' file: %s", local_file_path, strerror(errno));
             goto test_revision_err;
         }
-        file = NULL;
     }
     sxc_file_free(src);
     src = sxc_file_remote(cluster, uri->volume, uri->path, NULL);
@@ -1271,12 +1269,6 @@ static int test_revision(sxc_client_t *sx, sxc_cluster_t *cluster, const char *l
     ret = 0;
     PRINT("Succeeded");
 test_revision_err:
-    if(file) {
-        if(fclose(file) == EOF)
-            WARNING("Cannot close '%s' file: %s", local_file_path, strerror(errno));
-        if(unlink(local_file_path))
-            WARNING("Cannot delete '%s' file: %s", local_file_path, strerror(errno));
-    }
     cleanup_volumes(sx, cluster, &vdata, 1);
     free(local_file_path);
     free(remote_file_path);
