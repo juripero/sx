@@ -1900,7 +1900,7 @@ static int volume_test(sxc_client_t *sx, sxc_cluster_t *cluster, const char *loc
     for(i=0; tests[i].name; i++) {
         if(tests[i].for_volume && (args->run_test_given ? !strcmp(args->run_test_arg, tests[i].name) : (tests[i].additional ? args->all_flag : 1))) {
             if(tests[i].dedicated) {
-                if(f && !strcmp(f->shortname, tests[i].name) && run_test(sx, cluster, local_dir_path, remote_dir_path, uri->profile, uri->host, f ? f->shortname : NULL, filters, fcount, args, max_revisions, check_data_size, &tests[i])) {
+                if(f && !strcmp(f->shortname, tests[i].name) && run_test(sx, cluster, local_dir_path, remote_dir_path, uri->profile, uri->host, f->shortname, filters, fcount, args, max_revisions, check_data_size, &tests[i])) {
                     failed_test_msg(args, &tests[i]);
                     goto volume_test_err;
                 }
