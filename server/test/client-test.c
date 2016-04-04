@@ -756,11 +756,11 @@ static void create_block(rnd_state_t *state, unsigned char *block, uint64_t bloc
         block[i] = rand_2cmres(state);
 } /* create_block */
 
-static int create_file(const char* local_file_path, uint64_t block_size, uint64_t block_count, unsigned char sha_hash[SXI_SHA1_BIN_LEN], int force_size, FILE **file) {
+static int create_file(const char* local_file_path, uint64_t block_size, uint64_t block_count, unsigned char sha_hash[SXI_SHA1_BIN_LEN], int force_size) {
     int ret = 1;
     uint64_t seed, i;
     unsigned char *block = NULL;
-    FILE *file2;
+    FILE *file;
     rnd_state_t state;
     sxi_md_ctx *ctx = NULL;
 
@@ -782,8 +782,8 @@ static int create_file(const char* local_file_path, uint64_t block_size, uint64_
                 ERROR("Unknown blocksize");
                 return ret;
         }
-    file2 = fopen(local_file_path, "wrb");
-    if(!file2) {
+    file = fopen(local_file_path, "wrb");
+    if(!file) {
         ERROR("Cannot create '%s' file: %s", local_file_path, strerror(errno));
         return ret;
     }
@@ -807,7 +807,7 @@ static int create_file(const char* local_file_path, uint64_t block_size, uint64_
             goto create_file_err;
         }
         for(i=0; i<block_count; i++) {
-            if(fwrite(block, sizeof(unsigned char), block_size, file2) != block_size) {
+            if(fwrite(block, sizeof(unsigned char), block_size, file) != block_size) {
                 ERROR("Error while writing to '%s' file (%llu)", local_file_path, (unsigned long long)i);
                 goto create_file_err;
             }
@@ -821,22 +821,13 @@ static int create_file(const char* local_file_path, uint64_t block_size, uint64_
             goto create_file_err;
         }
     }
-    if(file) {
-        rewind(file2);
-        if(ftell(file2) == -1) {
-            ERROR("Cannot rewind '%s' file: %s", local_file_path, strerror(errno));
-            goto create_file_err;
-        }
-        *file = file2;
-        file2 = NULL;
-    }
 
     ret = 0;
 create_file_err:
     free(block);
     sxi_md_cleanup(&ctx);
-    if(file2) {
-        if(fclose(file2) == EOF)
+    if(file) {
+        if(fclose(file) == EOF)
             WARNING("Cannot close '%s' file: %s", local_file_path, strerror(errno));
         if(ret && unlink(local_file_path))
             WARNING("Cannot delete '%s' file: %s", local_file_path, strerror(errno));
@@ -963,7 +954,7 @@ static int test_empty_file(sxc_client_t *sx, sxc_cluster_t *cluster, const char 
         goto test_empty_file_err;
     }
     sprintf(remote_file_path, "%s%s", remote_dir_path, EMPTY_FILE_NAME);
-    if(create_file(local_file_path, 0, 0, NULL, 1, NULL))
+    if(create_file(local_file_path, 0, 0, NULL, 1))
         goto test_empty_file_err;
     if(upload_file(sx, cluster, local_file_path, remote_dir_path, 0)) {
         ERROR("Cannot upload '%s' file", local_file_path);
@@ -1020,7 +1011,7 @@ static int test_transfer(sxc_client_t *sx, sxc_cluster_t *cluster, const char *l
         PRINT("Creating file of size: %.2f%c (%llu*%.0f%c)", to_human(block_size*block_count), to_human_suffix(block_size*block_count), (unsigned long long)block_count, to_human(block_size), to_human_suffix(block_size));
     else
         PRINT("Creating file of size: %llu (%llu*%llu)", (unsigned long long)block_size*block_count, (unsigned long long)block_count, (unsigned long long)block_size);
-    if(create_file(local_file_path, block_size, block_count, hash, 0, NULL))
+    if(create_file(local_file_path, block_size, block_count, hash, 0))
         goto test_transfer_err;
     PRINT("Uploading");
     if(upload_file(sx, cluster, local_file_path, remote_dir_path, 0)) {
@@ -1142,7 +1133,7 @@ static int test_revision(sxc_client_t *sx, sxc_cluster_t *cluster, const char *l
     }
 
     for(i=0; i<max_revisions; i++) {
-        if(create_file(local_file_path, block_size, block_count, hashes[max_revisions-1-i], !i, NULL))
+        if(create_file(local_file_path, block_size, block_count, hashes[max_revisions-1-i], !i))
             goto test_revision_err;
         if(sxc_copy_single(src, dest, 0, 0, 0, NULL, 1)) {
             ERROR("Cannot upload '%s' file: %s", local_file_path, sxc_geterrmsg(sx));
@@ -1317,7 +1308,7 @@ static int test_cat(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_
         goto test_cat_err;
     }
     sprintf(remote_file_path, "%s%s", remote_dir_path, CAT_FILE_NAME_IN);
-    if(create_file(local_file_path, SX_BS_LARGE, CAT_FILE_SIZE, hash, 1, NULL))
+    if(create_file(local_file_path, SX_BS_LARGE, CAT_FILE_SIZE, hash, 1))
         goto test_cat_err;
     if(upload_file(sx, cluster, local_file_path, remote_file_path, 0)) {
         ERROR("Cannot upload '%s' file", local_file_path);
@@ -1395,7 +1386,7 @@ static int test_rename(sxc_client_t *sx, sxc_cluster_t *cluster, const char *loc
         goto test_rename_err;
     }
     sprintf(remote_file_path, "%s%s", remote_dir_path, RENAME_FILE_NAME);
-    if(create_file(local_file_path, 0, 0, NULL, 1, NULL))
+    if(create_file(local_file_path, 0, 0, NULL, 1))
         goto test_rename_err;
     if(upload_file(sx, cluster, local_file_path, remote_dir_path, 0)) {
         ERROR("Cannot upload '%s' file", local_file_path);
@@ -1506,7 +1497,7 @@ static int test_errors(sxc_client_t *sx, sxc_cluster_t *cluster, const char *loc
         goto test_errors_err;
     }
     sprintf(remote_file_path, "%s%s", remote_dir_path, ERRORS_FILE_NAME);
-    if(create_file(local_file_path, 0, 0, NULL, 1, NULL))
+    if(create_file(local_file_path, 0, 0, NULL, 1))
         goto test_errors_err;
     if(upload_file(sx, cluster, local_file_path, remote_file_path, 0)) {
         ERROR("Cannot upload '%s' file", local_file_path);
@@ -1667,7 +1658,7 @@ static int test_attribs(sxc_client_t *sx, sxc_cluster_t *cluster, const char *lo
             goto test_attribs_err;
         }
         sprintf(remote_files_paths[i], "%s%s%d", remote_dir_path, ATTRIBS_FILE_NAME, i);
-        if(create_file(local_files_paths[i], 0, 0, NULL, 1, NULL))
+        if(create_file(local_files_paths[i], 0, 0, NULL, 1))
             goto test_attribs_err;
         owner = (rand_2cmres(&state)%8) | 4;
         group = rand_2cmres(&state)%8;
@@ -1761,7 +1752,7 @@ static int test_undelete(sxc_client_t *sx, sxc_cluster_t *cluster, const char *l
         goto test_undelete_err;
     }
     sprintf(remote_file_path, "%s%s", remote_dir_path, UNDELETE_FILE_NAME);
-    if(create_file(local_file_path, 0, 0, NULL, 1, NULL))
+    if(create_file(local_file_path, 0, 0, NULL, 1))
         goto test_undelete_err;
     if(upload_file(sx, cluster, local_file_path, remote_file_path, 0)) {
         ERROR("Cannot upload '%s' file", local_file_path);
@@ -1830,7 +1821,7 @@ static int test_undelete_vol(sxc_client_t *sx, sxc_cluster_t *cluster, const cha
         goto test_undelete_vol_err;
     }
     sprintf(remote_file_path, "sx://%s%s%s/%s/%s/%s", profile_name ? profile_name : "", profile_name ? "@" : "", cluster_name, vdata[1].name, REMOTE_DIR, UNDELETE_FILE_NAME);
-    if(create_file(local_file_path, 0, 0, NULL, 1, NULL))
+    if(create_file(local_file_path, 0, 0, NULL, 1))
         goto test_undelete_vol_err;
     if(upload_file(sx, cluster, local_file_path, remote_file_path, 0)) {
         ERROR("Cannot upload '%s' file", local_file_path);
@@ -2217,7 +2208,7 @@ static int test_user_quota(sxc_client_t *sx, sxc_cluster_t *cluster, const char 
     /* Actual test begins here */
 
     /* Create test file: its size on local disk will be exactly one SX_BS_LARGE bytes */
-    if(create_file(local_file_path, SX_BS_LARGE, 1, NULL, 1, NULL))
+    if(create_file(local_file_path, SX_BS_LARGE, 1, NULL, 1))
         goto test_user_quota_err;
     file_created = 1;
 
@@ -2335,7 +2326,7 @@ static int test_volume_quota(sxc_client_t *sx, sxc_cluster_t *cluster, const cha
         ERROR("Cannot open '%s' directory: %s", remote_path, sxc_geterrmsg(sx));
         goto test_quota_err;
     }
-    if(create_file(local_file_path, SX_BS_LARGE, QUOTA_FILE_SIZE, NULL, 1, NULL))
+    if(create_file(local_file_path, SX_BS_LARGE, QUOTA_FILE_SIZE, NULL, 1))
         goto test_quota_err;
     file = 1;
     qret = sxc_copy_single(src, dest, 0, 0, 0, NULL, 1);
@@ -2412,7 +2403,7 @@ static int test_copy(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local
         goto test_copy_err;
     }
     sprintf(remote_file2_path, "sx://%s%s%s/%s/%s/%s", profile_name ? profile_name : "", profile_name ? "@" : "", cluster_name, vdata[1].name, REMOTE_DIR, COPY_FILE_NAME);
-    if(create_file(local_file_path, SX_BS_MEDIUM, 10, hash, 1, NULL))
+    if(create_file(local_file_path, SX_BS_MEDIUM, 10, hash, 1))
         goto test_copy_err;
     PRINT("Uploading file");
     if(upload_file(sx, cluster, local_file_path, remote_file1_path, 0)) {
@@ -2532,7 +2523,7 @@ static int test_paths(sxc_client_t *sx, sxc_cluster_t *cluster, const char *loca
         goto test_paths_err;
     }
     sprintf(local_file_path, "%sfile_paths", local_dir_path);
-    if(create_file(local_file_path, 0, 0, NULL, 1, NULL))
+    if(create_file(local_file_path, 0, 0, NULL, 1))
         goto test_paths_err;
     src = sxc_file_local(sx, local_file_path);
     if(!src) {
@@ -2871,7 +2862,7 @@ static int test_acl(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_
         goto test_acl_err;
     }
     sprintf(local_file_path, "%s%s", local_dir_path, ACL_FILE_NAME);
-    if(create_file(local_file_path, 0, 0, NULL, 1, NULL))
+    if(create_file(local_file_path, 0, 0, NULL, 1))
         goto test_acl_err;
     switch(check_user(cluster, vdata[0].name, udata[0].username, SX_ACL_FULL)) { /* read + write + manager + owner */
         case -1:
