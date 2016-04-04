@@ -1432,6 +1432,10 @@ static int test_rename(sxc_client_t *sx, sxc_cluster_t *cluster, const char *loc
                 goto test_rename_err;
             case 1: break;
         }
+        if(delete_files(sx, cluster, NULL, remote_file_path, 1)) {
+            ERROR("Cannot delete '%s' file", remote_file_path);
+            goto test_rename_err;
+        }
         sprintf(remote_file_path, "%s%s", remote_dir_path, RENAME_FILE_NAME);
         switch(find_file(sx, cluster, remote_file_path, 0)) {
             case -1:
@@ -1461,6 +1465,10 @@ static int test_rename(sxc_client_t *sx, sxc_cluster_t *cluster, const char *loc
                 ERROR("'%s' file should not be renamed", remote_file_path);
                 goto test_rename_err;
             case 1: break;
+        }
+        if(delete_files(sx, cluster, NULL, remote_file_path, 1)) {
+            ERROR("Cannot delete '%s' file", remote_file_path);
+            goto test_rename_err;
         }
     }
     PRINT("Succeeded");
