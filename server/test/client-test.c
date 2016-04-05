@@ -46,6 +46,7 @@
 #include "version.h"
 #include "rgen.h"
 #include "client-test-cmdline.h"
+#include "libsxclient/src/fileops.h"
 
 #define VOLSIZE (replica*1024LL*1024LL*1024LL)
 #define VOLNAME "vol" /* There will be 6 random characters suffix added. There CANNOT be '..' inside! */
@@ -62,7 +63,7 @@
 #define UNDELETE_FILE_NAME "file_undelete"
 #define QUOTA_FILE_NAME "file_quota"
 #define QUOTA_VOL_SIZE 1
-#define QUOTA_FILE_SIZE 5 /* Must be more then QUOTA_VOL_SIZE */
+#define QUOTA_FILE_SIZE 2 /* Must be more then QUOTA_VOL_SIZE */
 #define COPY_FILE_NAME "file_copy"
 #define ACL_USER1 "user1" /* There will be 6 random characters suffix added. */
 #define ACL_USER2 "user2" /* There will be 6 random characters suffix added. */
@@ -1162,16 +1163,6 @@ static int test_revision(sxc_client_t *sx, sxc_cluster_t *cluster, const char *l
         ERROR("Too many revisions");
         goto test_revision_err;
     }
-    dest2 = sxc_file_remote(cluster, uri->volume, REV_FILE_NAME"-copy", NULL);
-    if(!dest2) {
-        ERROR("Cannot open '%s/%s' file: %s", vdata.name, uri->path, sxc_geterrmsg(sx));
-        goto test_revision_err;
-    }
-    dest3 = sxc_file_remote(cluster, vdata.name, uri->path, NULL);
-    if(!dest3) {
-        ERROR("Cannot open '%s/%s' file: %s", vdata.name, uri->path, sxc_geterrmsg(sx));
-        goto test_revision_err;
-    }
     PRINT("Checking file versions");
     for(i=0; i<max_revisions; i++) {
         sxc_file_free(src);
@@ -1204,20 +1195,6 @@ static int test_revision(sxc_client_t *sx, sxc_cluster_t *cluster, const char *l
             ERROR("Cannot delete '%s' file: %s (%d)", local_file_path, strerror(errno), i);
             goto test_revision_err;
         }
-        /* Copy revisions within the same volume */
-        if(sxc_copy_sxfile(src, dest2, 1)) {
-            ERROR("Cannot copy '%s' file within same volume: %s (%d)", remote_file_path, sxc_geterrmsg(sx), i);
-            goto test_revision_err;
-        }
-        if(check_filemeta(sx, dest2, vol_filter))
-            goto test_revision_err;
-        /* Copy revisions into another cluster */
-        if(sxc_copy_sxfile(src, dest3, 1)) {
-            ERROR("Cannot copy '%s' file to another volume: %s (%d)", remote_file_path, sxc_geterrmsg(sx), i);
-            goto test_revision_err;
-        }
-        if(check_filemeta(sx, dest3, vdata.filter_name))
-            goto test_revision_err;
     }
 
     sxc_file_free(src);
@@ -1226,7 +1203,37 @@ static int test_revision(sxc_client_t *sx, sxc_cluster_t *cluster, const char *l
         ERROR("Cannot open '%s' (%s) file: %s", remote_file_path, sxc_file_get_revision(revs->revisions[i]->file), sxc_geterrmsg(sx));
         goto test_revision_err;
     }
-    /* Remove one of revisions */
+    if(sxi_filemeta_process(sx, NULL, NULL, src, NULL)) { /* workaround for bb#1878 */
+        ERROR("Cannot process filemeta: %s", sxc_geterrmsg(sx));
+        goto test_revision_err;
+    }
+    /* Copy the revision within the same volume */
+    PRINT("Checking revision within the same volume");
+    dest2 = sxc_file_remote(cluster, uri->volume, REV_FILE_NAME"-copy", NULL);
+    if(!dest2) {
+        ERROR("Cannot open '%s/%s' file: %s", uri->volume, REV_FILE_NAME"-copy", sxc_geterrmsg(sx));
+        goto test_revision_err;
+    }
+    if(sxc_copy_sxfile(src, dest2, 1)) {
+        ERROR("Cannot copy '%s' file within same volume: %s", remote_file_path, sxc_geterrmsg(sx));
+        goto test_revision_err;
+    }
+    if(check_filemeta(sx, dest2, vol_filter))
+        goto test_revision_err;
+    /* Copy revision into another volume */
+    PRINT("Checking revision on another volume");
+    dest3 = sxc_file_remote(cluster, vdata.name, uri->path, NULL);
+    if(!dest3) {
+        ERROR("Cannot open '%s/%s' file: %s", vdata.name, uri->path, sxc_geterrmsg(sx));
+        goto test_revision_err;
+    }
+    if(sxc_copy_sxfile(src, dest3, 1)) {
+        ERROR("Cannot copy '%s' file to another volume: %s", remote_file_path, sxc_geterrmsg(sx));
+        goto test_revision_err;
+    }
+    if(check_filemeta(sx, dest3, vdata.filter_name))
+        goto test_revision_err;
+    /* Remove the revision */
     if(sxc_remove_sxfile(src)) {
         ERROR("Cannot remove '%s' (%s) file: %s", remote_file_path, sxc_file_get_revision(revs->revisions[max_revisions/2]->file), sxc_geterrmsg(sx));
         goto test_revision_err;
@@ -2514,8 +2521,6 @@ static int test_paths(sxc_client_t *sx, sxc_cluster_t *cluster, const char *loca
     vdata[0].filter_name = vdata[0].filter_cfg = vdata[1].filter_name = vdata[1].filter_cfg = NULL;
     vdata[0].owner = vdata[1].owner = args->owner_arg;
     vdata[0].replica = vdata[1].replica = args->replica_arg;
-    if(rand_filters)
-        vdata[1].filter_name = "aes256";
     if(get_filters(filters, fcount, vdata, sizeof(vdata)/sizeof(*vdata), rand_filters, args)) {
         ERROR("Cannot get filters");
         goto test_paths_err;
@@ -3201,26 +3206,26 @@ test_acl_err:
 client_test_t tests[] = {
 /*  {for_volume, no_filter, dedicated, additional, rand_filters, block_size, block_count, name, function},*/
     {1, 1, 0, 0, 0, 0, 0, "empty_file", test_empty_file},
-    {1, 0, 0, 0, 0, SX_BS_SMALL, 26, "transfer:small", test_transfer},
-    {1, 0, 0, 0, 0, SX_BS_MEDIUM, 2314, "transfer:medium", test_transfer},
-    {1, 0, 0, 1, 0, SX_BS_LARGE, 285, "transfer:large", test_transfer},
-    {1, 1, 0, 0, 0, SX_BS_SMALL, 29, "revision:small", test_revision},
-    {1, 1, 0, 0, 0, SX_BS_MEDIUM, 649, "revision:medium", test_revision},
-    {1, 1, 0, 1, 0, SX_BS_LARGE, 131, "revision:large", test_revision},
+    {1, 0, 0, 0, 0, SX_BS_SMALL, 15, "transfer:small", test_transfer},
+    {1, 0, 0, 1, 0, SX_BS_MEDIUM, 10, "transfer:medium", test_transfer},
+    {1, 0, 0, 1, 0, SX_BS_LARGE, 130, "transfer:large", test_transfer},
+    {1, 1, 0, 0, 0, SX_BS_SMALL, 15, "revision:small", test_revision},
+    {1, 1, 0, 1, 0, SX_BS_MEDIUM, 10, "revision:medium", test_revision},
+    {1, 1, 0, 1, 0, SX_BS_LARGE, 130, "revision:large", test_revision},
     {1, 1, 0, 0, 0, 0, 0, "cat", test_cat},
-    {1, 0, 0, 0, 1, 0, 0, "rename", test_rename},
+    {1, 1, 0, 0, 1, 0, 0, "rename", test_rename},
+    {1, 0, 0, 1, 1, 0, 0, "rename:all", test_rename},
     {1, 1, 0, 0, 0, 0, 0, "errors", test_errors},
     {1, 0, 1, 0, 0, 0, 0, "attribs", test_attribs},
     {1, 0, 1, 0, 0, 0, 0, "undelete", test_undelete},
-    {0, 0, 1, 0, 0, 0, 0, "undelete:volume", test_undelete_vol},
+    {0, 0, 1, 1, 0, 0, 0, "undelete:volume", test_undelete_vol},
     {0, 0, 0, 0, 0, 0, 0, "volume_meta", test_volmeta},
     {0, 0, 0, 0, 0, 0, 0, "quota:user", test_user_quota},
-/*    {0, 0, 0, 0, 1, 0, 0, "quota:user:filters", test_user_quota},*/ /* TODO: metadata are included in quot */
+/*    {0, 0, 0, 0, 1, 0, 0, "quota:user:filters", test_user_quota},*/ /* TODO: metadata is included in quota */
     {0, 0, 0, 0, 0, 0, 0, "quota:volume", test_volume_quota},
     {0, 0, 0, 0, 0, 0, 0, "copy", test_copy},
     {0, 0, 0, 0, 1, 0, 0, "copy:filters", test_copy},
-    {0, 0, 0, 0, 0, 0, 0, "paths", test_paths},
-    {0, 0, 0, 0, 1, 0, 0, "paths:filters", test_paths},
+    {0, 0, 0, 0, 1, 0, 0, "paths", test_paths},
     {0, 0, 0, 0, 0, 0, 0, "acl", test_acl},
     {-1, -1, -1, -1, -1, 0, 0, NULL, NULL}
 };
