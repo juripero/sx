@@ -48,8 +48,10 @@
 #include "client-test-cmdline.h"
 #include "libsxclient/src/fileops.h"
 
-#define VOLSIZE (replica*1024LL*1024LL*1024LL)
+#define VOLSIZE ((vdata[i].replica?vdata[i].replica:1)*1024LL*1024LL*1024LL)
 #define VOLNAME "vol" /* There will be 6 random characters suffix added. There CANNOT be '..' inside! */
+#define VOL_RESIZE_FROM (4ULL*1024ULL*1024ULL*1024ULL) /* 4GB */
+#define VOL_RESIZE_TO (5ULL*1024ULL*1024ULL*1024ULL) /* 5GB */
 #define LOCAL_DIR "/tmp/.test" /* There will be 6 random characters suffix added. */
 #define REMOTE_DIR ".test"
 #define EMPTY_FILE_NAME "file_empty"
@@ -204,7 +206,7 @@ static int randomize_name(char *name) {
     return 0;
 }
 
-static int create_volume(sxc_client_t *sx, sxc_cluster_t *cluster, const char *volname, const char *owner, const sxf_handle_t *filter, const char *filter_cfg, int replica, unsigned int max_revisions, int human_readable, int hide_errors) {
+static int create_volume(sxc_client_t *sx, sxc_cluster_t *cluster, const char *volname, const char *owner, uint64_t size, const sxf_handle_t *filter, const char *filter_cfg, int replica, unsigned int max_revisions, int human_readable, int hide_errors) {
     void *cfgdata = NULL;
     int ret = 1;
     uint8_t uuid[16];
@@ -270,7 +272,7 @@ static int create_volume(sxc_client_t *sx, sxc_cluster_t *cluster, const char *v
 	    }
 	}
     }
-    if(sxc_volume_add(cluster, volname, VOLSIZE, replica, max_revisions, meta, owner)) {
+    if(sxc_volume_add(cluster, volname, size, replica, max_revisions, meta, owner)) {
         if(!hide_errors)
             ERROR("%s", sxc_geterrmsg(sx));
         goto create_volume_err;
@@ -284,9 +286,9 @@ static int create_volume(sxc_client_t *sx, sxc_cluster_t *cluster, const char *v
         goto create_volume_err;
     }
     if(human_readable)
-        PRINT("Volume '%s' (replica: %d, size: %0.f%c) created", volname, replica, to_human(VOLSIZE), to_human_suffix(VOLSIZE));
+        PRINT("Volume '%s' (replica: %d, size: %0.f%c) created", volname, replica, to_human(size), to_human_suffix(size));
     else
-        PRINT("Volume '%s' (replica: %d, size: %lld) created", volname, replica, (long long int)VOLSIZE);
+        PRINT("Volume '%s' (replica: %d, size: %lld) created", volname, replica, (long long int)size);
 
     ret = 0;
 create_volume_err:
@@ -480,6 +482,7 @@ struct vol_data {
     const char *owner;
     unsigned int replica;
     unsigned int revisions;
+    uint64_t size;
     const char *filter_name;
     const char *filter_cfg;
 };
@@ -616,7 +619,7 @@ static int prepare_volumes(sxc_client_t *sx, sxc_cluster_t *cluster, const sxf_h
                 goto prepare_volumes_err;
             }
         }
-        if(create_volume(sx, cluster, vdata[i].name, vdata[i].owner ? vdata[i].owner : "admin", j == fcount ? NULL : &filters[j], vdata[i].filter_cfg, vdata[i].replica ? vdata[i].replica : 1, vdata[i].revisions ? vdata[i].revisions : 1, human_readable, hide_errors))
+        if(create_volume(sx, cluster, vdata[i].name, vdata[i].owner ? vdata[i].owner : "admin", vdata[i].size ? vdata[i].size : VOLSIZE, j == fcount ? NULL : &filters[j], vdata[i].filter_cfg, vdata[i].replica ? vdata[i].replica : 1, vdata[i].revisions ? vdata[i].revisions : 1, human_readable, hide_errors))
             goto prepare_volumes_err;
     }
 
@@ -1908,7 +1911,7 @@ static int volume_test(sxc_client_t *sx, sxc_cluster_t *cluster, const char *loc
     else
         check_data_size = 1;
     PRINT("Filter: %s; filter configuration: %s", f ? f->shortname : "<no filter>", filter_cfg ? filter_cfg : "<none>");
-    if(create_volume(sx, cluster, volname, args->owner_arg, filter_index >= 0 ? &filters[filter_index] : NULL, filter_cfg, args->replica_arg, max_revisions, args->human_flag, 0)) {
+    if(create_volume(sx, cluster, volname, args->owner_arg, 0, filter_index >= 0 ? &filters[filter_index] : NULL, filter_cfg, args->replica_arg, max_revisions, args->human_flag, 0)) {
         ERROR("Cannot create new volume");
         goto volume_test_err;
     }
@@ -3196,6 +3199,33 @@ test_acl_err:
     return ret;
 } /* test_acl */
 
+static int test_resize(sxc_client_t *sx, sxc_cluster_t *cluster, const char *local_dir_path, const char *remote_dir_path, const char *profile_name, const char *cluster_name, const char *vol_filter, int rand_filters, const sxf_handle_t *filters, int fcount, uint64_t block_size, uint64_t block_count, const struct gengetopt_args_info *args, unsigned int max_revisions, int check_data_size) {
+    int ret = 1;
+    struct vol_data vdata;
+
+    memset(&vdata, 0, sizeof(vdata));
+    vdata.owner = args->owner_arg;
+    vdata.replica = args->replica_arg;
+    vdata.size = VOL_RESIZE_FROM;
+    if(prepare_volumes(sx, cluster, filters, fcount, &vdata, 1, args->human_flag, 0)) {
+        ERROR("Failed to prepare volumes");
+        return ret;
+    }
+    if(args->human_flag)
+        PRINT("Resizing the volume to %.2f%c", to_human(VOL_RESIZE_TO), to_human_suffix(VOL_RESIZE_TO));
+    else
+        PRINT("Resizing the volume to %llu", VOL_RESIZE_TO);
+    if(sxc_volume_modify(cluster, vdata.name, NULL, VOL_RESIZE_TO, -1, NULL)) {
+        ERROR("Cannot enlarge the volume: %s", sxc_geterrmsg(sx));
+        goto test_resize_err;
+    }
+
+    ret = 0;
+test_resize_err:
+    cleanup_volumes(sx, cluster, &vdata, 1);
+    return ret;
+} /* test_resize */
+
 /* For test_transfer:
  *       Block size | Available number of blocks
  *    SX_BS_SMALL   |  0 - 31
@@ -3227,6 +3257,7 @@ client_test_t tests[] = {
     {0, 0, 0, 0, 1, 0, 0, "copy:filters", test_copy},
     {0, 0, 0, 0, 1, 0, 0, "paths", test_paths},
     {0, 0, 0, 0, 0, 0, 0, "acl", test_acl},
+    {0, 0, 0, 0, 0, 0, 0, "resize", test_resize},
     {-1, -1, -1, -1, -1, 0, 0, NULL, NULL}
 };
 
